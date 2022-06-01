@@ -1068,6 +1068,10 @@ impl Primitives for MockRuntime {
         }
         Ok(exp.cid)
     }
+
+    fn install_actor(&self, _code_cid: &Cid) -> anyhow::Result<(), anyhow::Error> {
+        Ok(())
+    }
 }
 
 impl Verifier for MockRuntime {

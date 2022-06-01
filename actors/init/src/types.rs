@@ -30,3 +30,19 @@ pub struct ExecReturn {
 
 impl Cbor for ExecReturn {}
 impl Cbor for ExecParams {}
+
+/// Init actor Install Params
+#[derive(Serialize_tuple, Deserialize_tuple)]
+pub struct InstallParams {
+    pub code: RawBytes,
+}
+
+/// Init actor Install Return value
+#[derive(Serialize_tuple, Deserialize_tuple)]
+pub struct InstallReturn {
+    pub code_cid: Cid,
+    pub installed: bool,
+}
+
+impl Cbor for InstallParams {}
+impl Cbor for InstallReturn {}
