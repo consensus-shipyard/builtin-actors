@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use anyhow::{anyhow, Error, Result};
 use cid::{multihash, Cid};
 use fil_actors_runtime::{make_empty_map, make_map_with_root_and_bitwidth};
-use fvm_ipld_blockstore::Blockstore;
+use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_ipld_encoding::{tuple::*, Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
@@ -21,6 +21,12 @@ pub struct THamt<K, V, const W: u32> {
 }
 
 impl<T: Cbor> TCid<T> {
+    pub fn new_cbor(value: &T, name: String, code: multihash::Code) -> Result<Self> {
+        let store = MemoryBlockstore::new();
+        let cid = store.put_cbor(value, code)?;
+        Ok(TCid { cid, name, code, _phantom: PhantomData })
+    }
+
     pub fn get_cbor<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
         store.get_cbor(&self.cid)
     }
@@ -33,23 +39,23 @@ impl<T: Cbor> TCid<T> {
 }
 
 impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>> {
-    pub fn get_cbor<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
-        make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
-            .map_err(|e| anyhow!("error loading {}: {}", self.name, e))
-    }
-
-    pub fn flush_cbor<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
-        let cid = value.flush().map_err(|e| anyhow!("error flushing {}: {}", self.name, e))?;
-        self.cid = cid;
-        Ok(())
-    }
-
     pub fn new_hamt<S: Blockstore>(store: &S, name: String, code: multihash::Code) -> Result<Self> {
         let cid = make_empty_map::<_, V>(store, W)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
 
         Ok(TCid { cid, name, code, _phantom: PhantomData })
+    }
+
+    pub fn get_hamt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
+        make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
+            .map_err(|e| anyhow!("error loading {}: {}", self.name, e))
+    }
+
+    pub fn flush_hamt<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
+        let cid = value.flush().map_err(|e| anyhow!("error flushing {}: {}", self.name, e))?;
+        self.cid = cid;
+        Ok(())
     }
 }
 
@@ -91,14 +97,14 @@ mod test {
             store: &BS,
             ch: &Checkpoint,
         ) -> anyhow::Result<()> {
-            let mut checkpoints = self.checkpoints.get_cbor(store)?;
+            let mut checkpoints = self.checkpoints.get_hamt(store)?;
 
             let epoch = ch.epoch();
             checkpoints.set(BytesKey::from(epoch.to_ne_bytes().to_vec()), ch.clone()).map_err(
                 |e| e.downcast_wrap(format!("failed to set checkpoint for epoch {}", epoch)),
             )?;
 
-            self.checkpoints.flush_cbor(&mut checkpoints)
+            self.checkpoints.flush_hamt(&mut checkpoints)
         }
     }
 }
