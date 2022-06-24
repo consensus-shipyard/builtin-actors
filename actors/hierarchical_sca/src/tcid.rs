@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use anyhow::{anyhow, Error, Result};
 use cid::{multihash, Cid};
-use fil_actors_runtime::make_map_with_root_and_bitwidth;
+use fil_actors_runtime::{make_empty_map, make_map_with_root_and_bitwidth};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::{tuple::*, Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
@@ -39,9 +39,17 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>> {
     }
 
     pub fn flush_cbor<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
-        let cid = value.flush()?;
+        let cid = value.flush().map_err(|e| anyhow!("error flushing {}: {}", self.name, e))?;
         self.cid = cid;
         Ok(())
+    }
+
+    pub fn new_hamt<S: Blockstore>(store: &S, name: String, code: multihash::Code) -> Result<Self> {
+        let cid = make_empty_map::<_, V>(store, W)
+            .flush()
+            .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
+
+        Ok(TCid { cid, name, code, _phantom: PhantomData })
     }
 }
 
@@ -49,6 +57,8 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>> {
 mod test {
     use super::{TCid, THamt};
     use crate::Checkpoint;
+    use anyhow::Result;
+    use cid::{multihash, Cid};
     use fil_actors_runtime::ActorDowncast;
     use fvm_ipld_blockstore::Blockstore;
     use fvm_ipld_encoding::{tuple::*, Cbor};
@@ -64,8 +74,19 @@ mod test {
     impl Cbor for State {}
 
     impl State {
+        pub fn new<S: Blockstore>(store: &S) -> Result<Self> {
+            Ok(Self {
+                child_state: None,
+                checkpoints: TCid::new_hamt(
+                    store,
+                    "checkpoints".to_owned(),
+                    multihash::Code::Blake2b256,
+                )?,
+            })
+        }
+
         /// flush a checkpoint
-        fn flush_checkpoint<BS: Blockstore>(
+        pub(crate) fn flush_checkpoint<BS: Blockstore>(
             &mut self,
             store: &BS,
             ch: &Checkpoint,
