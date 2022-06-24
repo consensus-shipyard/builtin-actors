@@ -2,7 +2,9 @@ use std::{any::type_name, marker::PhantomData};
 
 use anyhow::{anyhow, Error, Result};
 use cid::Cid;
-use fil_actors_runtime::{make_empty_map, make_map_with_root_and_bitwidth};
+use fil_actors_runtime::{
+    builtin::HAMT_BIT_WIDTH, make_empty_map, make_map_with_root_and_bitwidth,
+};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
@@ -50,7 +52,7 @@ pub struct TCid<T, C = codes::Blake2b256> {
 }
 
 /// Static typing information for HAMT fields.
-pub struct THamt<K, V, const W: u32> {
+pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
     _phantom_k: PhantomData<K>,
     _phantom_v: PhantomData<V>,
 }
@@ -125,12 +127,12 @@ mod test {
     use fvm_ipld_blockstore::Blockstore;
     use fvm_ipld_encoding::{tuple::*, Cbor};
     use fvm_ipld_hamt::BytesKey;
-    use fvm_shared::{clock::ChainEpoch, HAMT_BIT_WIDTH};
+    use fvm_shared::clock::ChainEpoch;
 
     #[derive(Serialize_tuple, Deserialize_tuple)]
     struct State {
         pub child_state: Option<TCid<State>>,
-        pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint, HAMT_BIT_WIDTH>>,
+        pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint>>,
     }
 
     impl Cbor for State {}
