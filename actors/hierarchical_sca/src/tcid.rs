@@ -1,12 +1,13 @@
 use std::{any::type_name, marker::PhantomData};
 
 use anyhow::{anyhow, Error, Result};
-use cid::{multihash, Cid};
+use cid::Cid;
 use fil_actors_runtime::{make_empty_map, make_map_with_root_and_bitwidth};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
-use fvm_ipld_encoding::{tuple::*, Cbor, CborStore};
+use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
+/// Helper type to be able to define `Code` as a generic parameter.
 pub trait CodeType {
     fn code() -> cid::multihash::Code;
 }
@@ -14,6 +15,8 @@ pub trait CodeType {
 pub mod codes {
     use super::CodeType;
 
+    /// Define a unit struct for a `Code` element that
+    /// can be used as a generic parameter.
     macro_rules! code_types {
     ($($code:ident => $typ:ident),+) => {
         $(
@@ -38,19 +41,40 @@ pub mod codes {
     }
 }
 
-// TODO: Implement these directly to make sure there's no extra data other than what `cid` does.
-#[derive(Serialize_tuple, Deserialize_tuple)]
+/// Static typing information for `Cid` fields to help
+/// read and write data safely.
 pub struct TCid<T, C = codes::Blake2b256> {
     cid: Cid,
     _phantom_t: PhantomData<T>,
     _phantom_c: PhantomData<C>,
 }
 
+/// Static typing information for HAMT fields.
 pub struct THamt<K, V, const W: u32> {
     _phantom_k: PhantomData<K>,
     _phantom_v: PhantomData<V>,
 }
 
+impl<T, C> serde::Serialize for TCid<T, C> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.cid.serialize(serializer)
+    }
+}
+
+impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'d>,
+    {
+        let cid = Cid::deserialize(deserializer)?;
+        Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
+    }
+}
+
+/// Operations on primitive types that can directly be read/written from/to CBOR.
 impl<T: Cbor, C: CodeType> TCid<T, C> {
     pub fn new_cbor(value: &T) -> Result<Self> {
         let store = MemoryBlockstore::new();
@@ -69,6 +93,7 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
     }
 }
 
+/// Operations for HAMT types that, once read, hold a reference to the underlying storage.
 impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
     pub fn new_hamt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = make_empty_map::<_, V>(store, W)
