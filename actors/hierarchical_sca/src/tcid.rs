@@ -7,11 +7,43 @@ use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_ipld_encoding::{tuple::*, Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
+pub trait CodeType {
+    fn code() -> cid::multihash::Code;
+}
+
+pub mod codes {
+    use super::CodeType;
+
+    macro_rules! code_types {
+    ($($code:ident => $typ:ident),+) => {
+        $(
+          pub struct $typ;
+
+          impl CodeType for $typ {
+              fn code() -> cid::multihash::Code {
+                  cid::multihash::Code::$code
+              }
+          }
+        )*
+    };
+  }
+
+    // XXX: For some reason none of the other code types work,
+    // not even on their own as a variable:
+    // let c = multihash::Code::Keccak256;
+    // ERROR: no variant or associated item named `Keccak256` found for enum `Code`
+    //        in the current scope variant or associated item not found in `Code`
+    code_types! {
+      Blake2b256 => Blake2b256
+    }
+}
+
+// TODO: Implement these directly to make sure there's no extra data other than what `cid` does.
 #[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct TCid<T> {
+pub struct TCid<T, C = codes::Blake2b256> {
     cid: Cid,
-    code: multihash::Code,
-    _phantom: PhantomData<T>,
+    _phantom_t: PhantomData<T>,
+    _phantom_c: PhantomData<C>,
 }
 
 pub struct THamt<K, V, const W: u32> {
@@ -19,11 +51,11 @@ pub struct THamt<K, V, const W: u32> {
     _phantom_v: PhantomData<V>,
 }
 
-impl<T: Cbor> TCid<T> {
-    pub fn new_cbor(value: &T, code: multihash::Code) -> Result<Self> {
+impl<T: Cbor, C: CodeType> TCid<T, C> {
+    pub fn new_cbor(value: &T) -> Result<Self> {
         let store = MemoryBlockstore::new();
-        let cid = store.put_cbor(value, code)?;
-        Ok(TCid { cid, code, _phantom: PhantomData })
+        let cid = store.put_cbor(value, C::code())?;
+        Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
     pub fn get_cbor<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
@@ -31,19 +63,19 @@ impl<T: Cbor> TCid<T> {
     }
 
     pub fn put_cbor<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
-        let cid = store.put_cbor(value, self.code)?;
+        let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
         Ok(())
     }
 }
 
-impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>> {
-    pub fn new_hamt<S: Blockstore>(store: &S, code: multihash::Code) -> Result<Self> {
+impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
+    pub fn new_hamt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = make_empty_map::<_, V>(store, W)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
 
-        Ok(TCid { cid, code, _phantom: PhantomData })
+        Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
     pub fn get_hamt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
@@ -64,7 +96,6 @@ mod test {
     use super::{TCid, THamt};
     use crate::Checkpoint;
     use anyhow::Result;
-    use cid::{multihash, Cid};
     use fil_actors_runtime::ActorDowncast;
     use fvm_ipld_blockstore::Blockstore;
     use fvm_ipld_encoding::{tuple::*, Cbor};
@@ -81,10 +112,7 @@ mod test {
 
     impl State {
         pub fn new<S: Blockstore>(store: &S) -> Result<Self> {
-            Ok(Self {
-                child_state: None,
-                checkpoints: TCid::new_hamt(store, multihash::Code::Blake2b256)?,
-            })
+            Ok(Self { child_state: None, checkpoints: TCid::new_hamt(store)? })
         }
 
         /// flush a checkpoint
