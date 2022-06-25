@@ -5,7 +5,7 @@ use cid::Cid;
 use fil_actors_runtime::{
     builtin::HAMT_BIT_WIDTH, make_empty_map, make_map_with_root_and_bitwidth,
 };
-use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
+use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
@@ -78,8 +78,7 @@ impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
 
 /// Operations on primitive types that can directly be read/written from/to CBOR.
 impl<T: Cbor, C: CodeType> TCid<T, C> {
-    pub fn new_cbor(value: &T) -> Result<Self> {
-        let store = MemoryBlockstore::new();
+    pub fn new_cbor<S: Blockstore>(store: &S, value: &T) -> Result<Self> {
         let cid = store.put_cbor(value, C::code())?;
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
