@@ -1,6 +1,7 @@
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
+use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_blockstore::MemoryBlockstore;
 use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
@@ -14,7 +15,7 @@ use std::path::Path;
 
 use crate::checkpoint::CrossMsgMeta;
 use crate::tcid::TAmt;
-use crate::tcid::{codes, TCid};
+use crate::tcid::TCid;
 
 /// StorableMsg stores all the relevant information required
 /// to execute cross-messages.
@@ -127,12 +128,18 @@ pub struct CrossMsgs {
 }
 impl Cbor for CrossMsgs {}
 
-#[derive(PartialEq, Eq, Clone, Debug, Default, Serialize_tuple, Deserialize_tuple)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct MetaTag {
     pub msgs_cid: TCid<TAmt<StorableMsg>>,
     pub meta_cid: TCid<TAmt<CrossMsgMeta>>,
 }
 impl Cbor for MetaTag {}
+
+impl MetaTag {
+    pub fn new<BS: Blockstore>(store: &BS) -> anyhow::Result<MetaTag> {
+        Ok(Self { msgs_cid: TCid::new_amt(store)?, meta_cid: TCid::new_amt(store)? })
+    }
+}
 
 impl CrossMsgs {
     pub fn new() -> Self {
@@ -141,7 +148,7 @@ impl CrossMsgs {
 
     pub(crate) fn cid(&self) -> anyhow::Result<Cid> {
         let store = MemoryBlockstore::new();
-        let mut meta = MetaTag::default();
+        let mut meta = MetaTag::new(&store)?;
 
         let mut msgs_array = meta.msgs_cid.get_amt(&store)?;
         msgs_array.batch_set(self.msgs.clone())?;
