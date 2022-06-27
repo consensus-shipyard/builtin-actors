@@ -3,7 +3,7 @@
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::{make_empty_map, ActorDowncast, Array, Map};
+use fil_actors_runtime::{make_empty_map, ActorDowncast, Map};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
@@ -19,7 +19,7 @@ use num_traits::Zero;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::tcid::{TCid, THamt};
+use crate::tcid::{TAmt, TCid, THamt};
 
 use super::checkpoint::*;
 use super::cross::*;
@@ -39,7 +39,7 @@ pub struct State {
     pub check_msg_registry: TCid<THamt<Cid, CrossMsgs>>,
     pub nonce: u64,
     pub bottomup_nonce: u64,
-    pub bottomup_msg_meta: Cid, // AMT[CrossMsgMeta] from child subnets to apply.
+    pub bottomup_msg_meta: TCid<TAmt<CrossMsgMeta, CROSSMSG_AMT_BITWIDTH>>,
     pub applied_bottomup_nonce: u64,
     pub applied_topdown_nonce: u64,
     pub atomic_exec_registry: Cid, // HAMT[cid]AtomicExec
@@ -56,10 +56,6 @@ impl State {
         let empty_atomic_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
-        let empty_bottomup_array =
-            Array::<(), BS>::new_with_bit_width(store, CROSSMSG_AMT_BITWIDTH)
-                .flush()
-                .map_err(|e| anyhow!("Failed to create empty messages array: {}", e))?;
         Ok(State {
             network_name: SubnetID::from_str(&params.network_name)?,
             total_subnets: Default::default(),
@@ -73,7 +69,7 @@ impl State {
             check_msg_registry: TCid::new_hamt(store)?,
             nonce: Default::default(),
             bottomup_nonce: Default::default(),
-            bottomup_msg_meta: empty_bottomup_array,
+            bottomup_msg_meta: TCid::new_amt(store)?,
             applied_bottomup_nonce: MAX_NONCE,
             applied_topdown_nonce: Default::default(),
             atomic_exec_registry: empty_atomic_map,
@@ -367,18 +363,14 @@ impl State {
         store: &BS,
         meta: &CrossMsgMeta,
     ) -> anyhow::Result<()> {
-        let mut crossmsgs = CrossMsgMetaArray::load(&self.bottomup_msg_meta, store)
-            .map_err(|e| anyhow!("failed to load crossmsg meta array: {}", e))?;
-
         let mut new_meta = meta.clone();
         new_meta.nonce = self.bottomup_nonce;
-        crossmsgs
-            .set(new_meta.nonce, new_meta)
-            .map_err(|e| anyhow!("failed to set crossmsg meta array: {}", e))?;
-        self.bottomup_msg_meta = crossmsgs.flush()?;
-
         self.bottomup_nonce += 1;
-        Ok(())
+        self.bottomup_msg_meta.update(store, |crossmsgs| {
+            crossmsgs
+                .set(new_meta.nonce, new_meta)
+                .map_err(|e| anyhow!("failed to set crossmsg meta array: {}", e))
+        })
     }
 
     /// commit topdown messages for their execution in the subnet

@@ -98,7 +98,7 @@ impl Harness {
         assert_eq!(st.min_stake, TokenAmount::from(MIN_COLLATERAL_AMOUNT));
         assert_eq!(st.check_period, DEFAULT_CHECKPOINT_PERIOD);
         assert_eq!(st.applied_bottomup_nonce, MAX_NONCE);
-        assert_eq!(st.bottomup_msg_meta, empty_bottomup_array);
+        assert_eq!(st.bottomup_msg_meta.cid(), empty_bottomup_array);
         verify_empty_map(rt, st.subnets.cid());
         verify_empty_map(rt, st.checkpoints.cid());
         verify_empty_map(rt, st.check_msg_registry.cid());
