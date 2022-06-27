@@ -3,7 +3,7 @@
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::{make_empty_map, ActorDowncast, Map};
+use fil_actors_runtime::{ActorDowncast, Map};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
@@ -13,12 +13,12 @@ use fvm_shared::bigint::{bigint_ser, BigInt};
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
-use fvm_shared::HAMT_BIT_WIDTH;
 use lazy_static::lazy_static;
 use num_traits::Zero;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use crate::atomic::AtomicExec;
 use crate::tcid::{TAmt, TCid, THamt};
 
 use super::checkpoint::*;
@@ -42,7 +42,7 @@ pub struct State {
     pub bottomup_msg_meta: TCid<TAmt<CrossMsgMeta, CROSSMSG_AMT_BITWIDTH>>,
     pub applied_bottomup_nonce: u64,
     pub applied_topdown_nonce: u64,
-    pub atomic_exec_registry: Cid, // HAMT[cid]AtomicExec
+    pub atomic_exec_registry: TCid<THamt<Cid, AtomicExec>>,
 }
 
 lazy_static! {
@@ -53,9 +53,6 @@ impl Cbor for State {}
 
 impl State {
     pub fn new<BS: Blockstore>(store: &BS, params: ConstructorParams) -> anyhow::Result<State> {
-        let empty_atomic_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
         Ok(State {
             network_name: SubnetID::from_str(&params.network_name)?,
             total_subnets: Default::default(),
@@ -72,7 +69,7 @@ impl State {
             bottomup_msg_meta: TCid::new_amt(store)?,
             applied_bottomup_nonce: MAX_NONCE,
             applied_topdown_nonce: Default::default(),
-            atomic_exec_registry: empty_atomic_map,
+            atomic_exec_registry: TCid::new_hamt(store)?,
         })
     }
 

@@ -102,7 +102,7 @@ impl Harness {
         verify_empty_map(rt, st.subnets.cid());
         verify_empty_map(rt, st.checkpoints.cid());
         verify_empty_map(rt, st.check_msg_registry.cid());
-        verify_empty_map(rt, st.atomic_exec_registry);
+        verify_empty_map(rt, st.atomic_exec_registry.cid());
     }
 
     pub fn register(
