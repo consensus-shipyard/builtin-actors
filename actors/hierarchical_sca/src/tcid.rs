@@ -6,7 +6,7 @@ use fil_actors_runtime::{
     builtin::HAMT_BIT_WIDTH, fvm_ipld_amt::Amt, make_empty_map, make_map_with_root_and_bitwidth,
 };
 use fvm_ipld_blockstore::Blockstore;
-use fvm_ipld_encoding::{Cbor, CborStore};
+use fvm_ipld_encoding::CborStore;
 use fvm_ipld_hamt::Hamt;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
@@ -68,7 +68,7 @@ pub mod codes {
 ///
 /// let mut my_ref: TCid<MyType> = TCid::new_cbor(&store, &MyType { my_field: 0 }).unwrap();
 ///
-/// my_ref.update(&store, |x| {
+/// my_ref.update_cbor(&store, |x| {
 ///   x.my_field += 1;
 ///   Ok(())
 /// }).unwrap();
@@ -190,7 +190,7 @@ where
     }
 
     /// Read the underlying `Cid` from the store or return an error if not found.
-    pub fn get<S: Blockstore>(&self, store: &S) -> Result<T> {
+    pub fn get_cbor<S: Blockstore>(&self, store: &S) -> Result<T> {
         match store.get_cbor(&self.cid)? {
             Some(x) => Ok(x),
             None => Err(anyhow!(
@@ -202,33 +202,33 @@ where
     }
 
     /// Put the value into the store and overwrite the `Cid`.
-    pub fn put<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
+    pub fn put_cbor<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
         let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
         Ok(())
     }
 
     /// Get the value, apply a function on it, put back the modified value, and return the result of the function.
-    pub fn modify<'s, S: Blockstore, R>(
+    pub fn modify_cbor<'s, S: Blockstore, R>(
         &mut self,
         store: &'s S,
         f: impl FnOnce(&mut T) -> Result<R>,
     ) -> Result<R> {
-        let mut value = self.get(store)?;
+        let mut value = self.get_cbor(store)?;
         let result = f(&mut value)?;
-        self.put(&store, &value)?;
+        self.put_cbor(&store, &value)?;
         Ok(result)
     }
 
     /// Get the value, apply a function on it, and put back the modified value.
-    pub fn update<'s, S: Blockstore, R>(
+    pub fn update_cbor<'s, S: Blockstore, R>(
         &mut self,
         store: &'s S,
         f: impl FnOnce(&mut T) -> Result<R>,
     ) -> Result<()> {
-        let mut value = self.get(store)?;
+        let mut value = self.get_cbor(store)?;
         f(&mut value)?;
-        self.put(store, &value)?;
+        self.put_cbor(store, &value)?;
         Ok(())
     }
 }
@@ -349,19 +349,28 @@ mod defaults {
 
     // This is different than just `Cid::default()`.
     // It's also different from what the default for HAMT or AMT is.
-    impl<T: Cbor + Default, C: CodeType> Default for TCid<T, C> {
+    impl<T, C: CodeType> Default for TCid<T, C>
+    where
+        T: Serialize + DeserializeOwned + Default,
+    {
         fn default() -> Self {
             Self::new_cbor(&MemoryBlockstore::new(), &T::default()).unwrap()
         }
     }
 
-    impl<K, V: Cbor, const W: u32> Default for TCid<THamt<K, V, W>, codes::Blake2b256> {
+    impl<K, V, const W: u32> Default for TCid<THamt<K, V, W>, codes::Blake2b256>
+    where
+        V: Serialize + DeserializeOwned,
+    {
         fn default() -> Self {
             Self::new_hamt(&MemoryBlockstore::new()).unwrap()
         }
     }
 
-    impl<V: Cbor, const W: u32> Default for TCid<TAmt<V, W>, codes::Blake2b256> {
+    impl<V, const W: u32> Default for TCid<TAmt<V, W>, codes::Blake2b256>
+    where
+        V: Serialize + DeserializeOwned,
+    {
         fn default() -> Self {
             Self::new_amt(&MemoryBlockstore::new()).unwrap()
         }
@@ -372,45 +381,68 @@ mod defaults {
 #[cfg(test)]
 mod test {
     use super::{TCid, THamt};
-    use crate::Checkpoint;
-    use anyhow::Result;
-    use fil_actors_runtime::ActorDowncast;
-    use fvm_ipld_blockstore::Blockstore;
-    use fvm_ipld_encoding::{tuple::*, Cbor};
+    use cid::Cid;
+    use fvm_ipld_blockstore::MemoryBlockstore;
+    use fvm_ipld_encoding::tuple::*;
     use fvm_ipld_hamt::BytesKey;
-    use fvm_shared::clock::ChainEpoch;
 
-    #[derive(Serialize_tuple, Deserialize_tuple)]
-    struct State {
-        pub child_state: Option<TCid<State>>,
-        pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint>>,
+    #[derive(Default, Serialize_tuple, Deserialize_tuple, PartialEq)]
+    struct TestRecord {
+        foo: u64,
+        bar: Vec<u8>,
     }
 
-    impl Cbor for State {}
+    #[derive(Default, Serialize_tuple, Deserialize_tuple)]
+    struct TestRecordTyped {
+        pub optional: Option<TCid<TestRecord>>,
+        pub map: TCid<THamt<String, TestRecord>>,
+    }
 
-    impl State {
-        pub fn new<S: Blockstore>(store: &S) -> Result<Self> {
-            Ok(Self { child_state: None, checkpoints: TCid::new_hamt(store)? })
-        }
-
-        /// flush a checkpoint
-        pub(crate) fn flush_checkpoint<BS: Blockstore>(
-            &mut self,
-            store: &BS,
-            ch: &Checkpoint,
-        ) -> anyhow::Result<()> {
-            let mut checkpoints = self.checkpoints.load(store)?;
-
-            let epoch = ch.epoch();
-            checkpoints.set(BytesKey::from(epoch.to_ne_bytes().to_vec()), ch.clone()).map_err(
-                |e| e.downcast_wrap(format!("failed to set checkpoint for epoch {}", epoch)),
-            )?;
-
-            self.checkpoints.flush(checkpoints)?;
-
-            Ok(())
+    impl TestRecordTyped {
+        fn new(store: &MemoryBlockstore) -> Self {
+            Self { optional: None, map: TCid::new_hamt(store).unwrap() }
         }
     }
 
-    // TODO: Test that a record defined with `Cid` fields has an identical CID as one that uses `TCid`.
+    #[derive(Default, Serialize_tuple, Deserialize_tuple)]
+    struct TestRecordUntyped {
+        pub optional: Option<Cid>,
+        pub map: Cid,
+    }
+
+    #[test]
+    fn default_cid_and_default_hamt_differ() {
+        let cid_typed: TCid<TestRecordTyped> = TCid::default();
+        let cid_untyped: TCid<TestRecordUntyped> = TCid::default();
+        // The stronger typing allows us to use proper default values,
+        // but this is a breaking change from the invalid values that came before.
+        assert_ne!(cid_typed.cid, cid_untyped.cid);
+    }
+
+    #[test]
+    fn default_value_read_fails() {
+        let cid_typed: TCid<TestRecordTyped> = TCid::default();
+        let store = MemoryBlockstore::new();
+        assert!(cid_typed.get_cbor(&store).is_err());
+    }
+
+    #[test]
+    fn hamt_modify() {
+        let store = MemoryBlockstore::new();
+        let mut rec = TestRecordTyped::new(&store);
+
+        let eggs = rec
+            .map
+            .modify(&store, |map| {
+                map.set(BytesKey::from("spam"), TestRecord { foo: 1, bar: Vec::new() })?;
+                Ok("eggs")
+            })
+            .unwrap();
+        assert_eq!(eggs, "eggs");
+
+        let map = rec.map.load(&store).unwrap();
+
+        let foo = map.get(&BytesKey::from("spam")).unwrap().map(|x| x.foo);
+        assert_eq!(foo, Some(1))
+    }
 }
