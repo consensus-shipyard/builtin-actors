@@ -150,13 +150,13 @@ impl CrossMsgs {
         let store = MemoryBlockstore::new();
         let mut meta = MetaTag::new(&store)?;
 
-        let mut msgs_array = meta.msgs_cid.get_amt(&store)?;
+        let mut msgs_array = meta.msgs_cid.load(&store)?;
         msgs_array.batch_set(self.msgs.clone())?;
-        meta.msgs_cid.flush_amt(&mut msgs_array)?;
+        meta.msgs_cid.flush(&mut msgs_array)?;
 
-        let mut meta_array = meta.meta_cid.get_amt(&store)?;
+        let mut meta_array = meta.meta_cid.load(&store)?;
         meta_array.batch_set(self.metas.clone())?;
-        meta.meta_cid.flush_amt(&mut meta_array)?;
+        meta.meta_cid.flush(&mut meta_array)?;
 
         let meta_cid: TCid<MetaTag> = TCid::new_cbor(&store, &meta)?;
 

@@ -316,7 +316,7 @@ impl Harness {
         rt.verify();
 
         let sub = self.get_subnet(rt, id).unwrap();
-        let crossmsgs = sub.top_down_msgs.get_amt(rt.store()).unwrap();
+        let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
         let msg = get_topdown_msg(&crossmsgs, expected_nonce - 1).unwrap().unwrap();
         assert_eq!(&sub.circ_supply, expected_circ_sup);
         assert_eq!(sub.nonce, expected_nonce);
@@ -494,7 +494,7 @@ impl Harness {
         } else {
             // top-down
             let sub = self.get_subnet(rt, &dest.down(&self.net_name).unwrap()).unwrap();
-            let crossmsgs = sub.top_down_msgs.get_amt(rt.store()).unwrap();
+            let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
             let msg = get_topdown_msg(&crossmsgs, nonce - 1).unwrap().unwrap();
             assert_eq!(&sub.circ_supply, expected_circ_sup);
             assert_eq!(sub.nonce, nonce);
@@ -600,7 +600,7 @@ impl Harness {
 
             if sto != st.network_name {
                 let sub = self.get_subnet(rt, &sto.down(&self.net_name).unwrap()).unwrap();
-                let crossmsgs = sub.top_down_msgs.get_amt(rt.store()).unwrap();
+                let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
                 let msg = get_topdown_msg(&crossmsgs, td_nonce).unwrap().unwrap();
                 assert_eq!(&msg.from, from);
                 assert_eq!(&msg.to, to);

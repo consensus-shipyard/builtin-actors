@@ -60,13 +60,13 @@ impl Subnet {
         store: &BS,
         msg: &StorableMsg,
     ) -> anyhow::Result<()> {
-        let mut crossmsgs = self.top_down_msgs.get_amt(store)?;
+        let mut crossmsgs = self.top_down_msgs.load(store)?;
 
         crossmsgs
             .set(msg.nonce, msg.clone())
             .map_err(|e| anyhow!("failed to set crossmsg meta array: {}", e))?;
 
-        self.top_down_msgs.flush_amt(&mut crossmsgs)
+        self.top_down_msgs.flush(&mut crossmsgs)
     }
 
     pub(crate) fn release_supply(&mut self, value: &TokenAmount) -> anyhow::Result<()> {

@@ -105,12 +105,24 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
     }
 
     /// Read the underlying `Cid` from the store.
-    pub fn get_cbor<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
+    pub fn get<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
         store.get_cbor(&self.cid)
     }
 
+    /// Load the underlying `Cid` from the store or return an error if not found.
+    pub fn load<S: Blockstore>(&self, store: &S) -> Result<T> {
+        self.get(store).and_then(|x| match x {
+            Some(x) => Ok(x),
+            None => Err(anyhow!(
+                "error loading {}: Cid ({}) did not match any in database",
+                type_name::<Self>(),
+                self.cid.to_string()
+            )),
+        })
+    }
+
     /// Put the value into the store and overwrite the `Cid`.
-    pub fn put_cbor<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
+    pub fn put<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
         let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
         Ok(())
@@ -136,14 +148,14 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
-    /// Create a HAMT pointing at the store with the underlying `Cid` as its root.
-    pub fn get_hamt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
+    /// Load a HAMT pointing at the store with the underlying `Cid` as its root.
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
         make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
     /// Flush the HAMT to the store and overwrite the `Cid`.
-    pub fn flush_hamt<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
+    pub fn flush<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
@@ -168,14 +180,14 @@ impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
-    /// Create an AMT pointing at the store with the underlying `Cid` as its root.
-    pub fn get_amt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>, Error> {
+    /// Load an AMT pointing at the store with the underlying `Cid` as its root.
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>, Error> {
         Amt::<V, _>::load(&self.cid, store)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
     /// Flush the AMT tot he store and overwrite the `Cid`.
-    pub fn flush_amt<'s, S: Blockstore>(&mut self, value: &mut Amt<V, &'s S>) -> Result<()> {
+    pub fn flush<'s, S: Blockstore>(&mut self, value: &mut Amt<V, &'s S>) -> Result<()> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
@@ -220,14 +232,14 @@ mod test {
             store: &BS,
             ch: &Checkpoint,
         ) -> anyhow::Result<()> {
-            let mut checkpoints = self.checkpoints.get_hamt(store)?;
+            let mut checkpoints = self.checkpoints.load(store)?;
 
             let epoch = ch.epoch();
             checkpoints.set(BytesKey::from(epoch.to_ne_bytes().to_vec()), ch.clone()).map_err(
                 |e| e.downcast_wrap(format!("failed to set checkpoint for epoch {}", epoch)),
             )?;
 
-            self.checkpoints.flush_hamt(&mut checkpoints)
+            self.checkpoints.flush(&mut checkpoints)
         }
     }
 
