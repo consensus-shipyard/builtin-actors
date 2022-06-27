@@ -1,11 +1,10 @@
 use anyhow::anyhow;
-use cid::multihash::Code;
 use cid::Cid;
-use fil_actors_runtime::{Array, BURNT_FUNDS_ACTOR_ADDR};
+use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
 use fvm_ipld_blockstore::MemoryBlockstore;
 use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
-use fvm_ipld_encoding::{CborStore, RawBytes};
+use fvm_ipld_encoding::RawBytes;
 use fvm_shared::address::{Address, SubnetID};
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;

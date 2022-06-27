@@ -5,7 +5,7 @@ use cid::Cid;
 use fil_actors_runtime::{
     builtin::HAMT_BIT_WIDTH, fvm_ipld_amt::Amt, make_empty_map, make_map_with_root_and_bitwidth,
 };
-use fvm_ipld_blockstore::Blockstore;
+use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
@@ -69,6 +69,7 @@ pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
 }
 
 impl<T, C> TCid<T, C> {
+    /// Read the underlying `Cid`.
     pub fn cid(&self) -> Cid {
         self.cid
     }
@@ -95,18 +96,6 @@ impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
     }
 }
 
-/// The default for `TCid` is the same as it was for `Cid`.
-impl<T, C> Default for TCid<T, C> {
-    fn default() -> Self {
-        Self {
-            /// XXX: Not sure this is correct, can we use this as an AMT for example?
-            cid: Default::default(),
-            _phantom_t: Default::default(),
-            _phantom_c: Default::default(),
-        }
-    }
-}
-
 /// Operations on primitive types that can directly be read/written from/to CBOR.
 impl<T: Cbor, C: CodeType> TCid<T, C> {
     /// Initialize a `TCid` by storing a value as CBOR in the store and capturing the `Cid`.
@@ -125,6 +114,19 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
         let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
         Ok(())
+    }
+}
+
+/// The default for `TCid` is the same as it was for `Cid`,
+/// but only for types that have a direct CBOR representation,
+/// meaning that the default `Cid` would not work as a HAMT for example.
+impl<T: Cbor, C> Default for TCid<T, C> {
+    fn default() -> Self {
+        Self {
+            cid: Default::default(),
+            _phantom_t: Default::default(),
+            _phantom_c: Default::default(),
+        }
     }
 }
 
@@ -154,6 +156,12 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
     }
 }
 
+impl<K, V: Cbor, const W: u32> Default for TCid<THamt<K, V, W>, codes::Blake2b256> {
+    fn default() -> Self {
+        Self::new_hamt(&MemoryBlockstore::new()).unwrap()
+    }
+}
+
 /// Operations for AMT types that, once read, hold a reference to the underlying storage.
 impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
     /// Initialize an empty AMT, flush it to the store and capture the `Cid`.
@@ -177,6 +185,12 @@ impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
         Ok(())
+    }
+}
+
+impl<V: Cbor, const W: u32> Default for TCid<TAmt<V, W>, codes::Blake2b256> {
+    fn default() -> Self {
+        Self::new_amt(&MemoryBlockstore::new()).unwrap()
     }
 }
 
