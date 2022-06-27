@@ -117,16 +117,11 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
     }
 }
 
-/// The default for `TCid` is the same as it was for `Cid`,
-/// but only for types that have a direct CBOR representation,
-/// meaning that the default `Cid` would not work as a HAMT for example.
-impl<T: Cbor, C> Default for TCid<T, C> {
+// This is different than just `Cid::default()`. It's also
+// different from what the default for HAMT or AMT is.
+impl<T: Cbor + Default, C: CodeType> Default for TCid<T, C> {
     fn default() -> Self {
-        Self {
-            cid: Default::default(),
-            _phantom_t: Default::default(),
-            _phantom_c: Default::default(),
-        }
+        Self::new_cbor(&MemoryBlockstore::new(), &T::default()).unwrap()
     }
 }
 

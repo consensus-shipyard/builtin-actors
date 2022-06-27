@@ -151,7 +151,7 @@ impl CrossMsgs {
         meta_array.batch_set(self.metas.clone())?;
         meta.meta_cid.flush_amt(&mut meta_array)?;
 
-        let meta_cid: TCid<MetaTag, codes::Blake2b256> = TCid::new_cbor(&store, &meta)?;
+        let meta_cid: TCid<MetaTag> = TCid::new_cbor(&store, &meta)?;
 
         Ok(meta_cid.cid())
     }
