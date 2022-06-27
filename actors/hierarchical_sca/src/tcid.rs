@@ -24,6 +24,7 @@ pub mod codes {
     macro_rules! code_types {
     ($($code:ident => $typ:ident),+) => {
         $(
+          #[derive(PartialEq, Eq, Clone, Debug)]
           pub struct $typ;
 
           impl CodeType for $typ {
@@ -47,6 +48,7 @@ pub mod codes {
 
 /// Static typing information for `Cid` fields to help
 /// read and write data safely.
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct TCid<T, C = codes::Blake2b256> {
     cid: Cid,
     _phantom_t: PhantomData<T>,
@@ -54,14 +56,22 @@ pub struct TCid<T, C = codes::Blake2b256> {
 }
 
 /// Static typing information for HAMT fields, a.k.a. `Map`.
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
     _phantom_k: PhantomData<K>,
     _phantom_v: PhantomData<V>,
 }
 
 /// Static typing information for AMT fields, a.k.a. `Array`.
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
     _phantom_v: PhantomData<V>,
+}
+
+impl<T, C> TCid<T, C> {
+    pub fn cid(&self) -> Cid {
+        self.cid
+    }
 }
 
 /// `TCid` serializes exactly as its underling `Cid`.
@@ -82,6 +92,18 @@ impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
     {
         let cid = Cid::deserialize(deserializer)?;
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
+    }
+}
+
+/// The default for `TCid` is the same as it was for `Cid`.
+impl<T, C> Default for TCid<T, C> {
+    fn default() -> Self {
+        Self {
+            /// XXX: Not sure this is correct, can we use this as an AMT for example?
+            cid: Default::default(),
+            _phantom_t: Default::default(),
+            _phantom_c: Default::default(),
+        }
     }
 }
 

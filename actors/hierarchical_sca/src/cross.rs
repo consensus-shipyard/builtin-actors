@@ -14,6 +14,8 @@ use fvm_shared::METHOD_SEND;
 use std::path::Path;
 
 use crate::checkpoint::CrossMsgMeta;
+use crate::tcid::TAmt;
+use crate::tcid::{codes, TCid};
 
 /// StorableMsg stores all the relevant information required
 /// to execute cross-messages.
@@ -128,8 +130,8 @@ impl Cbor for CrossMsgs {}
 
 #[derive(PartialEq, Eq, Clone, Debug, Default, Serialize_tuple, Deserialize_tuple)]
 pub struct MetaTag {
-    pub msgs_cid: Cid,
-    pub meta_cid: Cid,
+    pub msgs_cid: TCid<TAmt<StorableMsg>>,
+    pub meta_cid: TCid<TAmt<CrossMsgMeta>>,
 }
 impl Cbor for MetaTag {}
 
@@ -140,19 +142,19 @@ impl CrossMsgs {
 
     pub(crate) fn cid(&self) -> anyhow::Result<Cid> {
         let store = MemoryBlockstore::new();
-        let mut msgs_array = Array::new(&store);
+        let mut meta = MetaTag::default();
+
+        let mut msgs_array = meta.msgs_cid.get_amt(&store)?;
         msgs_array.batch_set(self.msgs.clone())?;
-        let msgs_cid = msgs_array
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty messages array: {}", e))?;
+        meta.msgs_cid.flush_amt(&mut msgs_array)?;
 
-        let mut meta_array = Array::new(&store);
-        meta_array.batch_set(self.msgs.clone())?;
-        let meta_cid = meta_array
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty messages array: {}", e))?;
+        let mut meta_array = meta.meta_cid.get_amt(&store)?;
+        meta_array.batch_set(self.metas.clone())?;
+        meta.meta_cid.flush_amt(&mut meta_array)?;
 
-        Ok(store.put_cbor(&MetaTag { msgs_cid: msgs_cid, meta_cid: meta_cid }, Code::Blake2b256)?)
+        let meta_cid: TCid<MetaTag, codes::Blake2b256> = TCid::new_cbor(&store, &meta)?;
+
+        Ok(meta_cid.cid())
     }
 
     pub(crate) fn add_metas(&mut self, metas: Vec<CrossMsgMeta>) -> anyhow::Result<()> {
