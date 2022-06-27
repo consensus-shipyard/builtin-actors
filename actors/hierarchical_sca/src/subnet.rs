@@ -1,5 +1,4 @@
 use anyhow::anyhow;
-use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::repr::*;
@@ -8,10 +7,13 @@ use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;
 
+use crate::tcid::TAmt;
+use crate::tcid::TCid;
+use crate::CROSSMSG_AMT_BITWIDTH;
+
 use super::checkpoint::*;
 use super::cross::StorableMsg;
 use super::state::State;
-use super::types::*;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
 #[repr(i32)]
@@ -26,7 +28,7 @@ pub struct Subnet {
     pub id: SubnetID,
     #[serde(with = "bigint_ser")]
     pub stake: TokenAmount,
-    pub top_down_msgs: Cid, // AMT[type.Messages] from child subnets to apply.
+    pub top_down_msgs: TCid<TAmt<StorableMsg, CROSSMSG_AMT_BITWIDTH>>, // AMT[type.Messages] from child subnets to apply.
     pub nonce: u64,
     #[serde(with = "bigint_ser")]
     pub circ_supply: TokenAmount,
@@ -58,15 +60,13 @@ impl Subnet {
         store: &BS,
         msg: &StorableMsg,
     ) -> anyhow::Result<()> {
-        let mut crossmsgs = CrossMsgArray::load(&self.top_down_msgs, store)
-            .map_err(|e| anyhow!("failed to load crossmsg meta array: {}", e))?;
+        let mut crossmsgs = self.top_down_msgs.get_amt(store)?;
 
         crossmsgs
             .set(msg.nonce, msg.clone())
             .map_err(|e| anyhow!("failed to set crossmsg meta array: {}", e))?;
-        self.top_down_msgs = crossmsgs.flush()?;
 
-        Ok(())
+        self.top_down_msgs.flush_amt(&mut crossmsgs)
     }
 
     pub(crate) fn release_supply(&mut self, value: &TokenAmount) -> anyhow::Result<()> {

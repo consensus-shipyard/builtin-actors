@@ -21,6 +21,8 @@ use num_traits::Zero;
 use std::collections::HashMap;
 use std::str::FromStr;
 
+use crate::tcid::TCid;
+
 use super::checkpoint::*;
 use super::cross::*;
 use super::subnet::*;
@@ -118,15 +120,10 @@ impl State {
                     e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnets")
                 })?;
 
-        let empty_topdown_array =
-            Array::<(), BS>::new_with_bit_width(rt.store(), CROSSMSG_AMT_BITWIDTH)
-                .flush()
-                .map_err(|e| anyhow!("Failed to create empty messages array: {}", e))?;
-
         let subnet = Subnet {
             id: id.clone(),
             stake: val,
-            top_down_msgs: empty_topdown_array,
+            top_down_msgs: TCid::new_amt(rt.store())?,
             circ_supply: TokenAmount::zero(),
             status: Status::Active,
             nonce: 0,
@@ -546,7 +543,7 @@ impl State {
         // As soon as we see a message with the next msgMeta nonce, we increment the nonce
         // and start accepting the one for the next nonce.
         if self.applied_bottomup_nonce == u64::MAX && msg.nonce == 0 {
-            self.applied_bottomup_nonce = 0;            
+            self.applied_bottomup_nonce = 0;
         } else if self.applied_bottomup_nonce + 1 == msg.nonce {
             self.applied_bottomup_nonce += 1;
         };
