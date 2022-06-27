@@ -106,20 +106,20 @@ impl State {
         if val < self.min_stake {
             return Err(anyhow!("call to register doesn't include enough funds"));
         }
-        let mut subnets = self.subnets.load(rt.store())?;
-        let subnet = Subnet {
-            id: id.clone(),
-            stake: val,
-            top_down_msgs: TCid::new_amt(rt.store())?,
-            circ_supply: TokenAmount::zero(),
-            status: Status::Active,
-            nonce: 0,
-            prev_checkpoint: Checkpoint::default(),
-        };
-        set_subnet(&mut subnets, &id, subnet)?;
-        self.subnets.flush(subnets)?;
+        // XXX: Is the update going to fail if the subnet already exist?
         self.total_subnets += 1;
-        Ok(())
+        self.subnets.update(rt.store(), |subnets| {
+            let subnet = Subnet {
+                id: id.clone(),
+                stake: val,
+                top_down_msgs: TCid::new_amt(rt.store())?,
+                circ_supply: TokenAmount::zero(),
+                status: Status::Active,
+                nonce: 0,
+                prev_checkpoint: Checkpoint::default(),
+            };
+            set_subnet(subnets, &id, subnet)
+        })
     }
 
     /// Remove a subnet from the map of subnets and flush.
@@ -128,13 +128,13 @@ impl State {
         store: &BS,
         id: &SubnetID,
     ) -> anyhow::Result<()> {
-        let mut subnets = self.subnets.load(store)?;
-        subnets
-            .delete(&id.to_bytes())
-            .map_err(|e| e.downcast_wrap(format!("failed to delete subnet for id {}", id)))?;
-        self.subnets.flush(subnets)?;
+        // XXX: Is the update going to fail if the subnet doesn't exist?
         self.total_subnets -= 1;
-        Ok(())
+        self.subnets.update(store, |subnets| {
+            subnets
+                .delete(&id.to_bytes())
+                .map_err(|e| e.downcast_wrap(format!("failed to delete subnet for id {}", id)))
+        })
     }
 
     /// flush a subnet
@@ -143,10 +143,7 @@ impl State {
         store: &BS,
         sub: &Subnet,
     ) -> anyhow::Result<()> {
-        let mut subnets = self.subnets.load(store)?;
-        set_subnet(&mut subnets, &sub.id, sub.clone())?;
-        self.subnets.flush(subnets)?;
-        Ok(())
+        self.subnets.update(store, |subnets| set_subnet(subnets, &sub.id, sub.clone()))
     }
 
     /// flush a checkpoint
@@ -155,10 +152,7 @@ impl State {
         store: &BS,
         ch: &Checkpoint,
     ) -> anyhow::Result<()> {
-        let mut checkpoints = self.checkpoints.load(store)?;
-        set_checkpoint(&mut checkpoints, ch.clone())?;
-        self.checkpoints.flush(checkpoints)?;
-        Ok(())
+        self.checkpoints.update(store, |checkpoints| set_checkpoint(checkpoints, ch.clone()))
     }
 
     /// get checkpoint being populated in the current window.

@@ -141,7 +141,7 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
     }
 
     /// Load a HAMT pointing at the store with the underlying `Cid` as its root.
-    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>> {
         make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
@@ -155,6 +155,27 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
         Ok(value)
+    }
+
+    /// Load, modify and flush a value, returning something as a result.
+    pub fn modify<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut Hamt<&'s S, V>) -> Result<R>,
+    ) -> Result<R> {
+        let mut value = self.load(store)?;
+        let result = f(&mut value)?;
+        self.flush(value)?;
+        Ok(result)
+    }
+
+    /// Load, modify and flush a value.
+    pub fn update<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut Hamt<&'s S, V>) -> Result<R>,
+    ) -> Result<()> {
+        self.modify(store, |x| f(x)).map(|_| ())
     }
 }
 
@@ -170,7 +191,7 @@ impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
     }
 
     /// Load an AMT pointing at the store with the underlying `Cid` as its root.
-    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>, Error> {
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>> {
         Amt::<V, _>::load(&self.cid, store)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
@@ -181,6 +202,27 @@ impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
         Ok(value)
+    }
+
+    /// Load, modify and flush a value, returning something as a result.
+    pub fn modify<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut Amt<V, &'s S>) -> Result<R>,
+    ) -> Result<R> {
+        let mut value = self.load(store)?;
+        let result = f(&mut value)?;
+        self.flush(value)?;
+        Ok(result)
+    }
+
+    /// Load, modify and flush a value.
+    pub fn update<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut Amt<V, &'s S>) -> Result<R>,
+    ) -> Result<()> {
+        self.modify(store, |x| f(x)).map(|_| ())
     }
 }
 
