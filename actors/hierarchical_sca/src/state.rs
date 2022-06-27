@@ -37,7 +37,7 @@ pub struct State {
     pub min_stake: TokenAmount,
     pub subnets: TCid<THamt<Cid, Subnet>>,
     pub check_period: ChainEpoch,
-    pub checkpoints: Cid,        // HAMT[epoch]Checkpoint
+    pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint>>,
     pub check_msg_registry: Cid, // HAMT[cid]CrossMsgs
     pub nonce: u64,
     pub bottomup_nonce: u64,
@@ -55,9 +55,6 @@ impl Cbor for State {}
 
 impl State {
     pub fn new<BS: Blockstore>(store: &BS, params: ConstructorParams) -> anyhow::Result<State> {
-        let empty_checkpoint_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
         let empty_meta_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
@@ -77,7 +74,7 @@ impl State {
                 true => params.checkpoint_period,
                 false => DEFAULT_CHECKPOINT_PERIOD,
             },
-            checkpoints: empty_checkpoint_map,
+            checkpoints: TCid::new_hamt(store)?,
             check_msg_registry: empty_meta_map,
             nonce: Default::default(),
             bottomup_nonce: Default::default(),
@@ -158,15 +155,9 @@ impl State {
         store: &BS,
         ch: &Checkpoint,
     ) -> anyhow::Result<()> {
-        let mut checkpoints = make_map_with_root_and_bitwidth::<_, Checkpoint>(
-            &self.checkpoints,
-            store,
-            HAMT_BIT_WIDTH,
-        )
-        .map_err(|e| anyhow!("error loading checkpoints: {}", e))?;
+        let mut checkpoints = self.checkpoints.load(store)?;
         set_checkpoint(&mut checkpoints, ch.clone())?;
-        self.checkpoints =
-            checkpoints.flush().map_err(|e| anyhow!("error flushing checkpoints: {}", e))?;
+        self.checkpoints.flush(checkpoints)?;
         Ok(())
     }
 
@@ -180,14 +171,7 @@ impl State {
             return Err(anyhow!("epoch can't be negative"));
         }
         let ch_epoch = checkpoint_epoch(epoch, self.check_period);
-        let checkpoints = make_map_with_root_and_bitwidth::<_, Checkpoint>(
-            &self.checkpoints,
-            store,
-            HAMT_BIT_WIDTH,
-        )
-        .map_err(|e| {
-            e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load checkpoints")
-        })?;
+        let checkpoints = self.checkpoints.load(store)?;
 
         let out_ch = match get_checkpoint(&checkpoints, &ch_epoch)? {
             Some(ch) => ch.clone(),
