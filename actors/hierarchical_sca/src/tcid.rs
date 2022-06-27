@@ -8,8 +8,11 @@ use fil_actors_runtime::{
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
+use serde::de::DeserializeOwned;
+use serde::ser::Serialize;
 
-const AMT_BIT_WIDTH: u32 = 32;
+/// Same as `fvm_ipld_amt::DEFAULT_BIT_WIDTH`.
+const AMT_BIT_WIDTH: u32 = 3;
 
 /// Helper type to be able to define `Code` as a generic parameter.
 pub trait CodeType {
@@ -46,8 +49,32 @@ pub mod codes {
     }
 }
 
-/// Static typing information for `Cid` fields to help
-/// read and write data safely.
+/// Static typing information for `Cid` fields to help read and write data safely.
+///
+/// # Example
+/// ```
+/// use fil_actor_hierarchical_sca::tcid::TCid;
+/// use fvm_ipld_blockstore::MemoryBlockstore;
+/// use fvm_ipld_encoding::tuple::*;
+/// use fvm_ipld_encoding::Cbor;
+///
+/// #[derive(Serialize_tuple, Deserialize_tuple)]
+/// struct MyType {
+///   my_field: u64
+/// }
+/// impl Cbor for MyType {}
+///
+/// let store = MemoryBlockstore::new();
+///
+/// let mut my_ref: TCid<MyType> = TCid::new_cbor(&store, &MyType { my_field: 0 }).unwrap();
+///
+/// my_ref.update(&store, |x| {
+///   x.my_field += 1;
+///   Ok(())
+/// }).unwrap();
+///
+/// assert_eq!(1, my_ref.get(&store).unwrap().my_field);
+/// ```
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct TCid<T, C = codes::Blake2b256> {
     cid: Cid,
@@ -56,6 +83,35 @@ pub struct TCid<T, C = codes::Blake2b256> {
 }
 
 /// Static typing information for HAMT fields, a.k.a. `Map`.
+///
+/// # Example
+/// ```
+/// use fil_actor_hierarchical_sca::tcid::{TCid, THamt};
+/// use fvm_ipld_blockstore::MemoryBlockstore;
+/// use fvm_ipld_encoding::tuple::*;
+/// use fvm_ipld_encoding::Cbor;
+/// use fvm_ipld_hamt::BytesKey;
+///
+/// #[derive(Serialize_tuple, Deserialize_tuple)]
+/// struct MyType {
+///   my_field: TCid<THamt<String, u64>>
+/// }
+/// impl Cbor for MyType {}
+///
+/// let store = MemoryBlockstore::new();
+///
+/// let mut my_inst = MyType {
+///   my_field: TCid::new_hamt(&store).unwrap()
+/// };
+///
+/// let key = BytesKey::from("foo");
+///
+/// my_inst.my_field.update(&store, |x| {
+///   x.set(key.clone(), 1).map_err(|e| e.into())
+/// }).unwrap();
+///
+/// assert_eq!(&1, my_inst.my_field.load(&store).unwrap().get(&key).unwrap().unwrap())
+/// ```
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
     _phantom_k: PhantomData<K>,
@@ -63,6 +119,32 @@ pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
 }
 
 /// Static typing information for AMT fields, a.k.a. `Array`.
+///
+/// # Example
+/// ```
+/// use fil_actor_hierarchical_sca::tcid::{TCid, TAmt};
+/// use fvm_ipld_blockstore::MemoryBlockstore;
+/// use fvm_ipld_encoding::tuple::*;
+/// use fvm_ipld_encoding::Cbor;
+///
+/// #[derive(Serialize_tuple, Deserialize_tuple)]
+/// struct MyType {
+///   my_field: TCid<TAmt<String>>
+/// }
+/// impl Cbor for MyType {}
+///
+/// let store = MemoryBlockstore::new();
+///
+/// let mut my_inst = MyType {
+///   my_field: TCid::new_amt(&store).unwrap()
+/// };
+///
+/// my_inst.my_field.update(&store, |x| {
+///   x.set(0, "bar".into()).map_err(|e| e.into())
+/// }).unwrap();
+///
+/// assert_eq!(&"bar", my_inst.my_field.load(&store).unwrap().get(0).unwrap().unwrap())
+/// ```
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
     _phantom_v: PhantomData<V>,
@@ -97,28 +179,26 @@ impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
 }
 
 /// Operations on primitive types that can directly be read/written from/to CBOR.
-impl<T: Cbor, C: CodeType> TCid<T, C> {
+impl<T, C: CodeType> TCid<T, C>
+where
+    T: Serialize + DeserializeOwned,
+{
     /// Initialize a `TCid` by storing a value as CBOR in the store and capturing the `Cid`.
     pub fn new_cbor<S: Blockstore>(store: &S, value: &T) -> Result<Self> {
         let cid = store.put_cbor(value, C::code())?;
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
-    /// Read the underlying `Cid` from the store.
-    pub fn get<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
-        store.get_cbor(&self.cid)
-    }
-
     /// Read the underlying `Cid` from the store or return an error if not found.
-    pub fn get_or_err<S: Blockstore>(&self, store: &S) -> Result<T> {
-        self.get(store).and_then(|x| match x {
+    pub fn get<S: Blockstore>(&self, store: &S) -> Result<T> {
+        match store.get_cbor(&self.cid)? {
             Some(x) => Ok(x),
             None => Err(anyhow!(
                 "error loading {}: Cid ({}) did not match any in database",
                 type_name::<Self>(),
                 self.cid.to_string()
             )),
-        })
+        }
     }
 
     /// Put the value into the store and overwrite the `Cid`.
@@ -127,10 +207,37 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
         self.cid = cid;
         Ok(())
     }
+
+    /// Get the value, apply a function on it, put back the modified value, and return the result of the function.
+    pub fn modify<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<R> {
+        let mut value = self.get(store)?;
+        let result = f(&mut value)?;
+        self.put(&store, &value)?;
+        Ok(result)
+    }
+
+    /// Get the value, apply a function on it, and put back the modified value.
+    pub fn update<'s, S: Blockstore, R>(
+        &mut self,
+        store: &'s S,
+        f: impl FnOnce(&mut T) -> Result<R>,
+    ) -> Result<()> {
+        let mut value = self.get(store)?;
+        f(&mut value)?;
+        self.put(store, &value)?;
+        Ok(())
+    }
 }
 
 /// Operations for HAMT types that, once read, hold a reference to the underlying storage.
-impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
+impl<K, V, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256>
+where
+    V: Serialize + DeserializeOwned,
+{
     /// Initialize an empty HAMT, flush it to the store and capture the `Cid`.
     pub fn new_hamt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = make_empty_map::<_, V>(store, W)
@@ -180,7 +287,10 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
 }
 
 /// Operations for AMT types that, once read, hold a reference to the underlying storage.
-impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
+impl<V, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256>
+where
+    V: Serialize + DeserializeOwned,
+{
     /// Initialize an empty AMT, flush it to the store and capture the `Cid`.
     pub fn new_amt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = Amt::<V, _>::new_with_bit_width(store, W)
