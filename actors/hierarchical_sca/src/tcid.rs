@@ -3,11 +3,13 @@ use std::{any::type_name, marker::PhantomData};
 use anyhow::{anyhow, Error, Result};
 use cid::Cid;
 use fil_actors_runtime::{
-    builtin::HAMT_BIT_WIDTH, make_empty_map, make_map_with_root_and_bitwidth,
+    builtin::HAMT_BIT_WIDTH, fvm_ipld_amt::Amt, make_empty_map, make_map_with_root_and_bitwidth,
 };
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
+
+const AMT_BIT_WIDTH: u32 = 32;
 
 /// Helper type to be able to define `Code` as a generic parameter.
 pub trait CodeType {
@@ -51,12 +53,18 @@ pub struct TCid<T, C = codes::Blake2b256> {
     _phantom_c: PhantomData<C>,
 }
 
-/// Static typing information for HAMT fields.
+/// Static typing information for HAMT fields, a.k.a. `Map`.
 pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
     _phantom_k: PhantomData<K>,
     _phantom_v: PhantomData<V>,
 }
 
+/// Static typing information for AMT fields, a.k.a. `Array`.
+pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
+    _phantom_v: PhantomData<V>,
+}
+
+/// `TCid` serializes exactly as its underling `Cid`.
 impl<T, C> serde::Serialize for TCid<T, C> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -66,6 +74,7 @@ impl<T, C> serde::Serialize for TCid<T, C> {
     }
 }
 
+/// `TCid` deserializes exactly as its underlying `Cid`.
 impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -78,15 +87,18 @@ impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C> {
 
 /// Operations on primitive types that can directly be read/written from/to CBOR.
 impl<T: Cbor, C: CodeType> TCid<T, C> {
+    /// Initialize a `TCid` by storing a value as CBOR in the store and capturing the `Cid`.
     pub fn new_cbor<S: Blockstore>(store: &S, value: &T) -> Result<Self> {
         let cid = store.put_cbor(value, C::code())?;
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
+    /// Read the underlying `Cid` from the store.
     pub fn get_cbor<S: Blockstore>(&self, store: &S) -> Result<Option<T>> {
         store.get_cbor(&self.cid)
     }
 
+    /// Put the value into the store and overwrite the `Cid`.
     pub fn put_cbor<S: Blockstore>(&mut self, store: &S, value: &T) -> Result<()> {
         let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
@@ -96,6 +108,7 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
 
 /// Operations for HAMT types that, once read, hold a reference to the underlying storage.
 impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
+    /// Initialize an empty HAMT, flush it to the store and capture the `Cid`.
     pub fn new_hamt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = make_empty_map::<_, V>(store, W)
             .flush()
@@ -104,11 +117,13 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
         Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
     }
 
+    /// Create a HAMT pointing at the store with the underlying `Cid` as its root.
     pub fn get_hamt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>, Error> {
         make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
+    /// Flush the HAMT to the store and overwrite the `Cid`.
     pub fn flush_hamt<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
@@ -117,6 +132,33 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
     }
 }
 
+/// Operations for AMT types that, once read, hold a reference to the underlying storage.
+impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
+    /// Initialize an empty AMT, flush it to the store and capture the `Cid`.
+    pub fn new_amt<S: Blockstore>(store: &S) -> Result<Self> {
+        let cid = Amt::<V, _>::new_with_bit_width(store, W)
+            .flush()
+            .map_err(|e| anyhow!("Failed to create empty array: {}", e))?;
+
+        Ok(TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData })
+    }
+
+    /// Create an AMT pointing at the store with the underlying `Cid` as its root.
+    pub fn get_amt<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>, Error> {
+        Amt::<V, _>::load(&self.cid, store)
+            .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
+    }
+
+    /// Flush the AMT tot he store and overwrite the `Cid`.
+    pub fn flush_amt<'s, S: Blockstore>(&mut self, value: &mut Amt<V, &'s S>) -> Result<()> {
+        let cid =
+            value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
+        self.cid = cid;
+        Ok(())
+    }
+}
+
+#[allow(dead_code)]
 #[cfg(test)]
 mod test {
     use super::{TCid, THamt};
@@ -157,4 +199,6 @@ mod test {
             self.checkpoints.flush_hamt(&mut checkpoints)
         }
     }
+
+    // TODO: Test that a record defined with `Cid` fields has an identical CID as one that uses `TCid`.
 }
