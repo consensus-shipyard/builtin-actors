@@ -1,6 +1,6 @@
 use std::{any::type_name, marker::PhantomData};
 
-use anyhow::{anyhow, Error, Result};
+use anyhow::{anyhow, Result};
 use cid::Cid;
 use fil_actors_runtime::{
     builtin::HAMT_BIT_WIDTH, fvm_ipld_amt::Amt, make_empty_map, make_map_with_root_and_bitwidth,

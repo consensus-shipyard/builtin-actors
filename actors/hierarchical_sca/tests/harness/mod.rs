@@ -101,7 +101,7 @@ impl Harness {
         assert_eq!(st.bottomup_msg_meta, empty_bottomup_array);
         verify_empty_map(rt, st.subnets.cid());
         verify_empty_map(rt, st.checkpoints.cid());
-        verify_empty_map(rt, st.check_msg_registry);
+        verify_empty_map(rt, st.check_msg_registry.cid());
         verify_empty_map(rt, st.atomic_exec_registry);
     }
 
@@ -381,12 +381,7 @@ impl Harness {
         let chmeta_ind = ch.crossmsg_meta_index(&self.net_name, &parent).unwrap();
         let chmeta = &ch.data.cross_msgs[chmeta_ind];
 
-        let cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-            &st.check_msg_registry,
-            rt.store(),
-            HAMT_BIT_WIDTH,
-        )
-        .unwrap();
+        let cross_reg = st.check_msg_registry.load(rt.store()).unwrap();
         let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid).unwrap().unwrap();
         let msg = meta.msgs[expected_nonce as usize].clone();
 
@@ -477,12 +472,7 @@ impl Harness {
             let chmeta_ind = ch.crossmsg_meta_index(&self.net_name, &dest).unwrap();
             let chmeta = &ch.data.cross_msgs[chmeta_ind];
 
-            let cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-                &st.check_msg_registry,
-                rt.store(),
-                HAMT_BIT_WIDTH,
-            )
-            .unwrap();
+            let cross_reg = st.check_msg_registry.load(rt.store()).unwrap();
             let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid).unwrap().unwrap();
             let msg = meta.msgs[nonce as usize].clone();
 

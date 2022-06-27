@@ -3,9 +3,7 @@
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::{
-    make_empty_map, make_map_with_root_and_bitwidth, ActorDowncast, Array, Map,
-};
+use fil_actors_runtime::{make_empty_map, ActorDowncast, Array, Map};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
@@ -38,7 +36,7 @@ pub struct State {
     pub subnets: TCid<THamt<Cid, Subnet>>,
     pub check_period: ChainEpoch,
     pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint>>,
-    pub check_msg_registry: Cid, // HAMT[cid]CrossMsgs
+    pub check_msg_registry: TCid<THamt<Cid, CrossMsgs>>,
     pub nonce: u64,
     pub bottomup_nonce: u64,
     pub bottomup_msg_meta: Cid, // AMT[CrossMsgMeta] from child subnets to apply.
@@ -55,9 +53,6 @@ impl Cbor for State {}
 
 impl State {
     pub fn new<BS: Blockstore>(store: &BS, params: ConstructorParams) -> anyhow::Result<State> {
-        let empty_meta_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
         let empty_atomic_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
@@ -75,7 +70,7 @@ impl State {
                 false => DEFAULT_CHECKPOINT_PERIOD,
             },
             checkpoints: TCid::new_hamt(store)?,
-            check_msg_registry: empty_meta_map,
+            check_msg_registry: TCid::new_hamt(store)?,
             nonce: Default::default(),
             bottomup_nonce: Default::default(),
             bottomup_msg_meta: empty_bottomup_array,
@@ -230,14 +225,9 @@ impl State {
                     let mut msgmeta = CrossMsgMeta::new(&self.network_name, &to);
                     let mut n_mt = CrossMsgs::new();
                     n_mt.metas = metas;
-                    let mut cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-                        &self.check_msg_registry,
-                        store,
-                        HAMT_BIT_WIDTH,
-                    )?;
-
-                    let meta_cid = put_msgmeta(&mut cross_reg, n_mt)?;
-                    self.check_msg_registry = cross_reg.flush()?;
+                    let meta_cid = self
+                        .check_msg_registry
+                        .modify(store, |cross_reg| put_msgmeta(cross_reg, n_mt))?;
                     msgmeta.value += &value;
                     msgmeta.msgs_cid = meta_cid;
                     ch.append_msgmeta(msgmeta)?;
@@ -272,14 +262,9 @@ impl State {
                 let mut msgmeta = CrossMsgMeta::new(&sfrom, &sto);
                 let mut n_mt = CrossMsgs::new();
                 n_mt.msgs = vec![msg.clone()];
-                let mut cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-                    &self.check_msg_registry,
-                    store,
-                    HAMT_BIT_WIDTH,
-                )?;
-
-                let meta_cid = put_msgmeta(&mut cross_reg, n_mt)?;
-                self.check_msg_registry = cross_reg.flush()?;
+                let meta_cid = self
+                    .check_msg_registry
+                    .modify(store, |cross_reg| put_msgmeta(cross_reg, n_mt))?;
                 msgmeta.value += &msg.value;
                 msgmeta.msgs_cid = meta_cid;
                 ch.append_msgmeta(msgmeta)?;
@@ -301,27 +286,21 @@ impl State {
         meta_cid: &Cid,
         metas: Vec<CrossMsgMeta>,
     ) -> anyhow::Result<Cid> {
-        let mut cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-            &self.check_msg_registry,
-            store,
-            HAMT_BIT_WIDTH,
-        )?;
-
-        // get previous meta stored
-        let mut prev_meta = match cross_reg.get(&meta_cid.to_bytes())? {
-            Some(m) => m.clone(),
-            None => return Err(anyhow!("no msgmeta found for cid")),
-        };
-
-        prev_meta.add_metas(metas)?;
-
-        // if the cid hasn't changed
-        let cid = prev_meta.cid()?;
-        if &cid == meta_cid {
-            return Ok(cid);
-        }
-        // else we persist the new msgmeta
-        self.put_delete_flush_meta(&mut cross_reg, meta_cid, prev_meta)
+        self.check_msg_registry.modify(store, |cross_reg| {
+            // get previous meta stored
+            let mut prev_meta = match cross_reg.get(&meta_cid.to_bytes())? {
+                Some(m) => m.clone(),
+                None => return Err(anyhow!("no msgmeta found for cid")),
+            };
+            prev_meta.add_metas(metas)?;
+            // if the cid hasn't changed
+            let cid = prev_meta.cid()?;
+            if &cid == meta_cid {
+                Ok(cid)
+            } else {
+                replace_msgmeta(cross_reg, meta_cid, prev_meta)
+            }
+        })
     }
 
     /// append crossmsg to a specific mesasge meta.
@@ -333,45 +312,23 @@ impl State {
         meta_cid: &Cid,
         msg: &StorableMsg,
     ) -> anyhow::Result<Cid> {
-        let mut cross_reg = make_map_with_root_and_bitwidth::<_, CrossMsgs>(
-            &self.check_msg_registry,
-            store,
-            HAMT_BIT_WIDTH,
-        )?;
+        self.check_msg_registry.modify(store, |cross_reg| {
+            // get previous meta stored
+            let mut prev_meta = match cross_reg.get(&meta_cid.to_bytes())? {
+                Some(m) => m.clone(),
+                None => return Err(anyhow!("no msgmeta found for cid")),
+            };
 
-        // get previous meta stored
-        let mut prev_meta = match cross_reg.get(&meta_cid.to_bytes())? {
-            Some(m) => m.clone(),
-            None => return Err(anyhow!("no msgmeta found for cid")),
-        };
+            prev_meta.add_msg(&msg)?;
 
-        prev_meta.add_msg(&msg)?;
-
-        // if the cid hasn't changed
-        let cid = prev_meta.cid()?;
-        if &cid == meta_cid {
-            return Ok(cid);
-        }
-        // else we persist the new msgmeta
-        self.put_delete_flush_meta(&mut cross_reg, meta_cid, prev_meta)
-    }
-
-    /// update a message meta and remove the old one.
-    pub(crate) fn put_delete_flush_meta<BS: Blockstore>(
-        &mut self,
-        registry: &mut Map<BS, CrossMsgs>,
-        prev_cid: &Cid,
-        meta: CrossMsgs,
-    ) -> anyhow::Result<Cid> {
-        // add new meta
-        let m_cid = put_msgmeta(registry, meta)?;
-        // remove the previous one
-        registry.delete(&prev_cid.to_bytes())?;
-        // flush
-        self.check_msg_registry =
-            registry.flush().map_err(|e| anyhow!("error flushing crossmsg registry: {}", e))?;
-
-        Ok(m_cid)
+            // if the cid hasn't changed
+            let cid = prev_meta.cid()?;
+            if &cid == meta_cid {
+                Ok(cid)
+            } else {
+                replace_msgmeta(cross_reg, meta_cid, prev_meta)
+            }
+        })
     }
 
     /// release circulating supply from a subent
@@ -570,6 +527,19 @@ fn put_msgmeta<BS: Blockstore>(
     registry
         .set(m_cid.to_bytes().into(), metas)
         .map_err(|e| e.downcast_wrap(format!("failed to set crossmsg meta for cid {}", m_cid)))?;
+    Ok(m_cid)
+}
+
+/// insert a message meta and remove the old one.
+fn replace_msgmeta<BS: Blockstore>(
+    registry: &mut Map<BS, CrossMsgs>,
+    prev_cid: &Cid,
+    meta: CrossMsgs,
+) -> anyhow::Result<Cid> {
+    // add new meta
+    let m_cid = put_msgmeta(registry, meta)?;
+    // remove the previous one
+    registry.delete(&prev_cid.to_bytes())?;
     Ok(m_cid)
 }
 
