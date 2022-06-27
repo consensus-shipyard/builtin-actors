@@ -3,6 +3,7 @@ use fil_actors_runtime::runtime::Runtime;
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::repr::*;
 use fvm_ipld_encoding::tuple::*;
+use fvm_ipld_encoding::Cbor;
 use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;
@@ -28,13 +29,15 @@ pub struct Subnet {
     pub id: SubnetID,
     #[serde(with = "bigint_ser")]
     pub stake: TokenAmount,
-    pub top_down_msgs: TCid<TAmt<StorableMsg, CROSSMSG_AMT_BITWIDTH>>, // AMT[type.Messages] from child subnets to apply.
+    pub top_down_msgs: TCid<TAmt<StorableMsg, CROSSMSG_AMT_BITWIDTH>>,
     pub nonce: u64,
     #[serde(with = "bigint_ser")]
     pub circ_supply: TokenAmount,
     pub status: Status,
     pub prev_checkpoint: Checkpoint,
 }
+
+impl Cbor for Subnet {}
 
 impl Subnet {
     pub(crate) fn add_stake<BS, RT>(
@@ -51,7 +54,8 @@ impl Subnet {
         if self.stake < st.min_stake {
             self.status = Status::Inactive;
         }
-        st.flush_subnet(rt.store(), self)
+        st.flush_subnet(rt.store(), self)?;
+        Ok(())
     }
 
     /// store topdown messages for their execution in the subnet
@@ -66,7 +70,8 @@ impl Subnet {
             .set(msg.nonce, msg.clone())
             .map_err(|e| anyhow!("failed to set crossmsg meta array: {}", e))?;
 
-        self.top_down_msgs.flush(&mut crossmsgs)
+        self.top_down_msgs.flush(crossmsgs)?;
+        Ok(())
     }
 
     pub(crate) fn release_supply(&mut self, value: &TokenAmount) -> anyhow::Result<()> {

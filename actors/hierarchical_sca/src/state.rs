@@ -21,7 +21,7 @@ use num_traits::Zero;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::tcid::TCid;
+use crate::tcid::{TCid, THamt};
 
 use super::checkpoint::*;
 use super::cross::*;
@@ -29,13 +29,13 @@ use super::subnet::*;
 use super::types::*;
 
 /// Storage power actor state
-#[derive(Default, Serialize_tuple, Deserialize_tuple)]
+#[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct State {
     pub network_name: SubnetID,
     pub total_subnets: u64,
     #[serde(with = "bigint_ser")]
     pub min_stake: TokenAmount,
-    pub subnets: Cid, // HAMT[cid.Cid]Subnet
+    pub subnets: TCid<THamt<Cid, Subnet>>,
     pub check_period: ChainEpoch,
     pub checkpoints: Cid,        // HAMT[epoch]Checkpoint
     pub check_msg_registry: Cid, // HAMT[cid]CrossMsgs
@@ -55,9 +55,6 @@ impl Cbor for State {}
 
 impl State {
     pub fn new<BS: Blockstore>(store: &BS, params: ConstructorParams) -> anyhow::Result<State> {
-        let empty_sn_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
-            .flush()
-            .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
         let empty_checkpoint_map = make_empty_map::<_, ()>(store, HAMT_BIT_WIDTH)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty map: {}", e))?;
@@ -73,18 +70,21 @@ impl State {
                 .map_err(|e| anyhow!("Failed to create empty messages array: {}", e))?;
         Ok(State {
             network_name: SubnetID::from_str(&params.network_name)?,
+            total_subnets: Default::default(),
             min_stake: MIN_SUBNET_COLLATERAL.clone(),
+            subnets: TCid::new_hamt(store)?,
             check_period: match params.checkpoint_period > DEFAULT_CHECKPOINT_PERIOD {
                 true => params.checkpoint_period,
                 false => DEFAULT_CHECKPOINT_PERIOD,
             },
-            subnets: empty_sn_map,
             checkpoints: empty_checkpoint_map,
             check_msg_registry: empty_meta_map,
+            nonce: Default::default(),
+            bottomup_nonce: Default::default(),
             bottomup_msg_meta: empty_bottomup_array,
             applied_bottomup_nonce: MAX_NONCE,
+            applied_topdown_nonce: Default::default(),
             atomic_exec_registry: empty_atomic_map,
-            ..Default::default()
         })
     }
 
@@ -94,12 +94,7 @@ impl State {
         store: &BS,
         id: &SubnetID,
     ) -> anyhow::Result<Option<Subnet>> {
-        let subnets =
-            make_map_with_root_and_bitwidth::<_, Subnet>(&self.subnets, store, HAMT_BIT_WIDTH)
-                .map_err(|e| {
-                    e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnets")
-                })?;
-
+        let subnets = self.subnets.load(store)?;
         let subnet = get_subnet(&subnets, id)?;
         Ok(subnet.cloned())
     }
@@ -114,12 +109,7 @@ impl State {
         if val < self.min_stake {
             return Err(anyhow!("call to register doesn't include enough funds"));
         }
-        let mut subnets =
-            make_map_with_root_and_bitwidth::<_, Subnet>(&self.subnets, rt.store(), HAMT_BIT_WIDTH)
-                .map_err(|e| {
-                    e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnets")
-                })?;
-
+        let mut subnets = self.subnets.load(rt.store())?;
         let subnet = Subnet {
             id: id.clone(),
             stake: val,
@@ -130,9 +120,7 @@ impl State {
             prev_checkpoint: Checkpoint::default(),
         };
         set_subnet(&mut subnets, &id, subnet)?;
-        self.subnets = subnets.flush().map_err(|e| {
-            e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to flush subnets")
-        })?;
+        self.subnets.flush(subnets)?;
         self.total_subnets += 1;
         Ok(())
     }
@@ -143,17 +131,11 @@ impl State {
         store: &BS,
         id: &SubnetID,
     ) -> anyhow::Result<()> {
-        let mut subnets =
-            make_map_with_root_and_bitwidth::<_, Subnet>(&self.subnets, store, HAMT_BIT_WIDTH)
-                .map_err(|e| {
-                    e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnets")
-                })?;
+        let mut subnets = self.subnets.load(store)?;
         subnets
             .delete(&id.to_bytes())
             .map_err(|e| e.downcast_wrap(format!("failed to delete subnet for id {}", id)))?;
-        self.subnets = subnets.flush().map_err(|e| {
-            e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to flush subnets")
-        })?;
+        self.subnets.flush(subnets)?;
         self.total_subnets -= 1;
         Ok(())
     }
@@ -164,11 +146,9 @@ impl State {
         store: &BS,
         sub: &Subnet,
     ) -> anyhow::Result<()> {
-        let mut subnets =
-            make_map_with_root_and_bitwidth::<_, Subnet>(&self.subnets, store, HAMT_BIT_WIDTH)
-                .map_err(|e| anyhow!("error loading subnets: {}", e))?;
+        let mut subnets = self.subnets.load(store)?;
         set_subnet(&mut subnets, &sub.id, sub.clone())?;
-        self.subnets = subnets.flush().map_err(|e| anyhow!("error flushing subnets: {}", e))?;
+        self.subnets.flush(subnets)?;
         Ok(())
     }
 

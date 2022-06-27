@@ -99,7 +99,7 @@ impl Harness {
         assert_eq!(st.check_period, DEFAULT_CHECKPOINT_PERIOD);
         assert_eq!(st.applied_bottomup_nonce, MAX_NONCE);
         assert_eq!(st.bottomup_msg_meta, empty_bottomup_array);
-        verify_empty_map(rt, st.subnets);
+        verify_empty_map(rt, st.subnets.cid());
         verify_empty_map(rt, st.checkpoints);
         verify_empty_map(rt, st.check_msg_registry);
         verify_empty_map(rt, st.atomic_exec_registry);
@@ -621,8 +621,7 @@ impl Harness {
 
     pub fn get_subnet(&self, rt: &MockRuntime, id: &SubnetID) -> Option<Subnet> {
         let st: State = rt.get_state();
-        let subnets =
-            make_map_with_root_and_bitwidth(&st.subnets, rt.store(), HAMT_BIT_WIDTH).unwrap();
+        let subnets = st.subnets.load(rt.store()).unwrap();
         subnets.get(&id.to_bytes()).unwrap().cloned()
     }
 }

@@ -5,7 +5,7 @@ use cid::Cid;
 use fil_actors_runtime::{
     builtin::HAMT_BIT_WIDTH, fvm_ipld_amt::Amt, make_empty_map, make_map_with_root_and_bitwidth,
 };
-use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
+use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::{Cbor, CborStore};
 use fvm_ipld_hamt::Hamt;
 
@@ -109,8 +109,8 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
         store.get_cbor(&self.cid)
     }
 
-    /// Load the underlying `Cid` from the store or return an error if not found.
-    pub fn load<S: Blockstore>(&self, store: &S) -> Result<T> {
+    /// Read the underlying `Cid` from the store or return an error if not found.
+    pub fn get_or_err<S: Blockstore>(&self, store: &S) -> Result<T> {
         self.get(store).and_then(|x| match x {
             Some(x) => Ok(x),
             None => Err(anyhow!(
@@ -126,14 +126,6 @@ impl<T: Cbor, C: CodeType> TCid<T, C> {
         let cid = store.put_cbor(value, C::code())?;
         self.cid = cid;
         Ok(())
-    }
-}
-
-// This is different than just `Cid::default()`. It's also
-// different from what the default for HAMT or AMT is.
-impl<T: Cbor + Default, C: CodeType> Default for TCid<T, C> {
-    fn default() -> Self {
-        Self::new_cbor(&MemoryBlockstore::new(), &T::default()).unwrap()
     }
 }
 
@@ -155,17 +147,14 @@ impl<K, V: Cbor, const W: u32> TCid<THamt<K, V, W>, codes::Blake2b256> {
     }
 
     /// Flush the HAMT to the store and overwrite the `Cid`.
-    pub fn flush<'s, S: Blockstore>(&mut self, value: &mut Hamt<&'s S, V>) -> Result<()> {
+    pub fn flush<'s, S: Blockstore>(
+        &mut self,
+        mut value: Hamt<&'s S, V>,
+    ) -> Result<Hamt<&'s S, V>> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
-        Ok(())
-    }
-}
-
-impl<K, V: Cbor, const W: u32> Default for TCid<THamt<K, V, W>, codes::Blake2b256> {
-    fn default() -> Self {
-        Self::new_hamt(&MemoryBlockstore::new()).unwrap()
+        Ok(value)
     }
 }
 
@@ -186,18 +175,44 @@ impl<V: Cbor, const W: u32> TCid<TAmt<V, W>, codes::Blake2b256> {
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
-    /// Flush the AMT tot he store and overwrite the `Cid`.
-    pub fn flush<'s, S: Blockstore>(&mut self, value: &mut Amt<V, &'s S>) -> Result<()> {
+    /// Flush the AMT to the store and overwrite the `Cid`.
+    pub fn flush<'s, S: Blockstore>(&mut self, mut value: Amt<V, &'s S>) -> Result<Amt<V, &'s S>> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
-        Ok(())
+        Ok(value)
     }
 }
 
-impl<V: Cbor, const W: u32> Default for TCid<TAmt<V, W>, codes::Blake2b256> {
-    fn default() -> Self {
-        Self::new_amt(&MemoryBlockstore::new()).unwrap()
+/// These `Default` implementations are unsound, in that while they
+/// create `TCid` instances with correct `Cid` values, these values
+/// are not stored anywhere, so there is no guarantee that any retrieval
+/// attempt from a random store won't fail.
+///
+/// Their main purpose is to allow the `#[derive(Default)]` to be
+/// applied on types that use `TCid` fields, if that's unavoidable.
+mod defaults {
+    use super::*;
+    use fvm_ipld_blockstore::MemoryBlockstore;
+
+    // This is different than just `Cid::default()`.
+    // It's also different from what the default for HAMT or AMT is.
+    impl<T: Cbor + Default, C: CodeType> Default for TCid<T, C> {
+        fn default() -> Self {
+            Self::new_cbor(&MemoryBlockstore::new(), &T::default()).unwrap()
+        }
+    }
+
+    impl<K, V: Cbor, const W: u32> Default for TCid<THamt<K, V, W>, codes::Blake2b256> {
+        fn default() -> Self {
+            Self::new_hamt(&MemoryBlockstore::new()).unwrap()
+        }
+    }
+
+    impl<V: Cbor, const W: u32> Default for TCid<TAmt<V, W>, codes::Blake2b256> {
+        fn default() -> Self {
+            Self::new_amt(&MemoryBlockstore::new()).unwrap()
+        }
     }
 }
 
@@ -239,7 +254,9 @@ mod test {
                 |e| e.downcast_wrap(format!("failed to set checkpoint for epoch {}", epoch)),
             )?;
 
-            self.checkpoints.flush(&mut checkpoints)
+            self.checkpoints.flush(checkpoints)?;
+
+            Ok(())
         }
     }
 
