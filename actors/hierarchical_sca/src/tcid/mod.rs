@@ -45,12 +45,12 @@ macro_rules! tcid_ops {
             }
 
             /// Load, modify and flush a value.
-            pub fn update<'s, S: fvm_ipld_blockstore::Blockstore, R>(
+            pub fn update<'s, S: fvm_ipld_blockstore::Blockstore>(
                 &mut self,
                 store: &'s S,
-                f: impl FnOnce(&mut $item) -> anyhow::Result<R>,
+                f: impl FnOnce(&mut $item) -> anyhow::Result<()>,
             ) -> anyhow::Result<()> {
-                self.modify(store, f).map(|_| ())
+                self.modify(store, f)
             }
         }
     }

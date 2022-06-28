@@ -122,6 +122,7 @@ impl State {
             subnets
                 .delete(&id.to_bytes())
                 .map_err(|e| e.downcast_wrap(format!("failed to delete subnet for id {}", id)))
+                .map(|_| ())
         })
     }
 
