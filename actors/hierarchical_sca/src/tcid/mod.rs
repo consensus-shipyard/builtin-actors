@@ -169,13 +169,17 @@ mod test {
         assert!(cid_typed.load(&store).is_err());
     }
 
-    // #[test]
-    // fn ref_modify() {
-    //     let store = MemoryBlockstore::new();
-    //     let mut r: CRef<TestRecord> = CRef::new(&store, &TestRecord::default()).unwrap();
+    #[test]
+    fn ref_modify() {
+        let store = MemoryBlockstore::new();
+        let mut r: CRef<TestRecord> = CRef::new(&store, &TestRecord::default()).unwrap();
 
-    //     let mut c = r.load(&store).unwrap();
-    // }
+        let mut c = r.load(&store).unwrap();
+        c.foo += 1;
+        r.flush(c).unwrap();
+
+        assert_eq!(r.load(&store).unwrap().foo, 1);
+    }
 
     #[test]
     fn hamt_modify() {
