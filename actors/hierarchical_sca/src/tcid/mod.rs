@@ -50,7 +50,7 @@ macro_rules! tcid_ops {
                 store: &'s S,
                 f: impl FnOnce(&mut $item) -> anyhow::Result<R>,
             ) -> anyhow::Result<()> {
-                self.modify(store, |x| f(x)).map(|_| ())
+                self.modify(store, f).map(|_| ())
             }
         }
     }
@@ -65,7 +65,7 @@ macro_rules! tcid_serde {
     (
         $typ:ident < $($gen:ident $($const:ident)? $(: $b:ident $(+ $bs:ident)* )? ),+ >
     ) => {
-        /// `Content` serializes exactly as its underlying `Cid`.
+        /// Serializes exactly as its underlying `Cid`.
         impl < $($($const)? $gen $(: $b $(+ $bs)* )? ),+ > serde::Serialize for $typ<$($gen),+>
         {
             fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -76,7 +76,7 @@ macro_rules! tcid_serde {
             }
         }
 
-        /// `Content` deserializes exactly as its underlying `Cid`.
+        /// Deserializ exactly as its underlying `Cid`.
         impl<'d, $($($const)? $gen $(: $b $(+ $bs)* )? ),+ > serde::Deserialize<'d> for $typ<$($gen),+>
         where Self: From<Cid>
         {
@@ -174,9 +174,11 @@ mod test {
         let store = MemoryBlockstore::new();
         let mut r: CRef<TestRecord> = CRef::new(&store, &TestRecord::default()).unwrap();
 
-        let mut c = r.load(&store).unwrap();
-        c.foo += 1;
-        r.flush(c).unwrap();
+        r.modify(&store, |c| {
+            c.foo += 1;
+            Ok(())
+        })
+        .unwrap();
 
         assert_eq!(r.load(&store).unwrap().foo, 1);
     }
