@@ -18,6 +18,7 @@ use lazy_static::lazy_static;
 
 use fil_actor_hierarchical_sca::checkpoint::ChildCheck;
 use fil_actor_hierarchical_sca::ext;
+use fil_actor_hierarchical_sca::tcid::{Content, Stored};
 use fil_actor_hierarchical_sca::{
     get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
     CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
