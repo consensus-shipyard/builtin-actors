@@ -1,8 +1,8 @@
 use std::any::type_name;
 use std::marker::PhantomData;
 
-use super::{codes, CodeType, Content, Stored};
-use crate::tcid_serde;
+use super::{codes, CodeType, TCid};
+use crate::{tcid_ops, tcid_serde};
 use anyhow::{anyhow, Result};
 use cid::{multihash, Cid};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
@@ -15,7 +15,7 @@ use std::ops::{Deref, DerefMut};
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{CRef, Stored};
+/// use fil_actor_hierarchical_sca::tcid::CRef;
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;
@@ -50,7 +50,7 @@ impl<T, C: CodeType> From<Cid> for CRef<T, C> {
     }
 }
 
-impl<T, C: CodeType> Content for CRef<T, C> {
+impl<T, C: CodeType> TCid for CRef<T, C> {
     fn cid(&self) -> Cid {
         self.cid
     }
@@ -59,8 +59,6 @@ impl<T, C: CodeType> Content for CRef<T, C> {
         C::code()
     }
 }
-
-tcid_serde!(CRef<T, C>);
 
 pub struct StoreContent<'s, S: Blockstore, T> {
     store: &'s S,
@@ -91,16 +89,9 @@ where
         let cid = store.put_cbor(value, C::code())?;
         Ok(Self::from(cid))
     }
-}
-
-impl<'s, S: 's + Blockstore, T, C: CodeType> Stored<'s, S> for CRef<T, C>
-where
-    T: Serialize + DeserializeOwned,
-{
-    type Item = StoreContent<'s, S, T>;
 
     /// Read the underlying `Cid` from the store or return an error if not found.
-    fn load(&self, store: &'s S) -> Result<Self::Item> {
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<StoreContent<'s, S, T>> {
         match store.get_cbor(&self.cid)? {
             Some(content) => Ok(StoreContent { store, content }),
             None => Err(anyhow!(
@@ -112,12 +103,18 @@ where
     }
 
     /// Put the value into the store and overwrite the `Cid`.
-    fn flush(&mut self, value: Self::Item) -> Result<Self::Item> {
+    pub fn flush<'s, S: Blockstore>(
+        &mut self,
+        value: StoreContent<'s, S, T>,
+    ) -> Result<StoreContent<'s, S, T>> {
         let cid = value.store.put_cbor(&value.content, C::code())?;
         self.cid = cid;
         Ok(value)
     }
 }
+
+tcid_serde!(CRef<T, C>);
+tcid_ops!(CRef<T : Serialize + DeserializeOwned, C: CodeType> => StoreContent<'s, S, T>);
 
 /// This `Default` implementation is unsound in that while it
 /// creates `CRef` instances with a correct `Cid` value, this value

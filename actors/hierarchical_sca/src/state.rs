@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::atomic::AtomicExec;
-use crate::tcid::{CAmt, CHamt, Stored};
+use crate::tcid::{CAmt, CHamt};
 
 use super::checkpoint::*;
 use super::cross::*;

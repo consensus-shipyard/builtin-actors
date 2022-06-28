@@ -8,7 +8,7 @@ use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;
 
-use crate::tcid::{CAmt, Stored};
+use crate::tcid::CAmt;
 use crate::CROSSMSG_AMT_BITWIDTH;
 
 use super::checkpoint::*;

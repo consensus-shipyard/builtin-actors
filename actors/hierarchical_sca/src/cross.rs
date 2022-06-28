@@ -14,7 +14,7 @@ use fvm_shared::METHOD_SEND;
 use std::path::Path;
 
 use crate::checkpoint::CrossMsgMeta;
-use crate::tcid::{CAmt, CRef, Content, Stored};
+use crate::tcid::{CAmt, CRef, TCid};
 
 /// StorableMsg stores all the relevant information required
 /// to execute cross-messages.

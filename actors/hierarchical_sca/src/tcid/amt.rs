@@ -1,9 +1,9 @@
 use std::any::type_name;
 use std::marker::PhantomData;
 
-use crate::tcid_serde;
+use crate::{tcid_ops, tcid_serde};
 
-use super::{Content, Stored};
+use super::TCid;
 use anyhow::{anyhow, Result};
 use cid::multihash::Code;
 use cid::Cid;
@@ -19,7 +19,7 @@ const AMT_BIT_WIDTH: u32 = 3;
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{CAmt, Stored};
+/// use fil_actor_hierarchical_sca::tcid::CAmt;
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;
@@ -54,7 +54,7 @@ impl<V, const W: u32> From<Cid> for CAmt<V, W> {
     }
 }
 
-impl<V, const W: u32> Content for CAmt<V, W> {
+impl<V, const W: u32> TCid for CAmt<V, W> {
     fn cid(&self) -> Cid {
         self.cid
     }
@@ -63,8 +63,6 @@ impl<V, const W: u32> Content for CAmt<V, W> {
         Code::Blake2b256
     }
 }
-
-tcid_serde!(CAmt<V, W const: u32>);
 
 impl<V, const W: u32> CAmt<V, W>
 where
@@ -78,26 +76,22 @@ where
 
         Ok(Self::from(cid))
     }
-}
 
-impl<'s, S: 's + Blockstore, V, const W: u32> Stored<'s, S> for CAmt<V, W>
-where
-    V: Serialize + DeserializeOwned,
-{
-    type Item = Amt<V, &'s S>;
-
-    fn load(&self, store: &'s S) -> Result<Self::Item> {
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Amt<V, &'s S>> {
         Amt::<V, _>::load(&self.cid, store)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
-    fn flush(&mut self, mut value: Self::Item) -> Result<Self::Item> {
+    pub fn flush<'s, S: Blockstore>(&mut self, mut value: Amt<V, &'s S>) -> Result<Amt<V, &'s S>> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
         Ok(value)
     }
 }
+
+tcid_serde!(CAmt<V, W const: u32>);
+tcid_ops!(CAmt<V : Serialize + DeserializeOwned, W const: u32> => Amt<V, &'s S>);
 
 /// This `Default` implementation is unsound in that while it
 /// creates `CAmt` instances with a correct `Cid` value, this value

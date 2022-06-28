@@ -1,7 +1,7 @@
 use std::any::type_name;
 use std::marker::PhantomData;
 
-use crate::tcid_serde;
+use crate::{tcid_ops, tcid_serde};
 use anyhow::{anyhow, Result};
 use cid::{multihash::Code, Cid};
 use fil_actors_runtime::{make_empty_map, make_map_with_root_and_bitwidth};
@@ -11,13 +11,13 @@ use fvm_shared::HAMT_BIT_WIDTH;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 
-use super::{Content, Stored};
+use super::TCid;
 
 /// Static typing information for HAMT fields, a.k.a. `Map`.
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{CHamt, Stored};
+/// use fil_actor_hierarchical_sca::tcid::CHamt;
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;
@@ -56,7 +56,7 @@ impl<K, V, const W: u32> From<Cid> for CHamt<K, V, W> {
     }
 }
 
-impl<K, V, const W: u32> Content for CHamt<K, V, W> {
+impl<K, V, const W: u32> TCid for CHamt<K, V, W> {
     fn cid(&self) -> Cid {
         self.cid
     }
@@ -65,8 +65,6 @@ impl<K, V, const W: u32> Content for CHamt<K, V, W> {
         Code::Blake2b256
     }
 }
-
-tcid_serde!(CHamt<K, V, W const: u32>);
 
 impl<K, V, const W: u32> CHamt<K, V, W>
 where
@@ -80,26 +78,28 @@ where
 
         Ok(Self::from(cid))
     }
-}
 
-impl<'s, S: 's + Blockstore, K, V, const W: u32> Stored<'s, S> for CHamt<K, V, W>
-where
-    V: Serialize + DeserializeOwned,
-{
-    type Item = Hamt<&'s S, V>;
-
-    fn load(&self, store: &'s S) -> Result<Self::Item> {
+    /// Load the data pointing at the store with the underlying `Cid` as its root,
+    /// or return an error if the `Cid` is not found.
+    pub fn load<'s, S: Blockstore>(&self, store: &'s S) -> Result<Hamt<&'s S, V>> {
         make_map_with_root_and_bitwidth::<S, V>(&self.cid, store, W)
             .map_err(|e| anyhow!("error loading {}: {}", type_name::<Self>(), e))
     }
 
-    fn flush(&mut self, mut value: Self::Item) -> Result<Self::Item> {
+    /// Flush the data to the store and overwrite the `Cid`.
+    pub fn flush<'s, S: Blockstore>(
+        &mut self,
+        mut value: Hamt<&'s S, V>,
+    ) -> Result<Hamt<&'s S, V>> {
         let cid =
             value.flush().map_err(|e| anyhow!("error flushing {}: {}", type_name::<Self>(), e))?;
         self.cid = cid;
         Ok(value)
     }
 }
+
+tcid_serde!(CHamt<K, V : Serialize + DeserializeOwned, W const: u32>);
+tcid_ops!(CHamt<K, V : Serialize + DeserializeOwned, W const: u32> => Hamt<&'s S, V>);
 
 /// This `Default` implementation is unsound in that while it
 /// creates `CHamt` instances with a correct `Cid` value, this value
