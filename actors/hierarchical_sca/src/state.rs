@@ -94,20 +94,29 @@ impl State {
         if val < self.min_stake {
             return Err(anyhow!("call to register doesn't include enough funds"));
         }
-        // XXX: Is the update going to fail if the subnet already exist?
-        self.total_subnets += 1;
-        self.subnets.update(rt.store(), |subnets| {
-            let subnet = Subnet {
-                id: id.clone(),
-                stake: val,
-                top_down_msgs: CAmt::new(rt.store())?,
-                circ_supply: TokenAmount::zero(),
-                status: Status::Active,
-                nonce: 0,
-                prev_checkpoint: Checkpoint::default(),
-            };
-            set_subnet(subnets, &id, subnet)
-        })
+
+        let inserted = self.subnets.modify(rt.store(), |subnets| {
+            if get_subnet(subnets, id)?.is_some() {
+                Ok(false)
+            } else {
+                let subnet = Subnet {
+                    id: id.clone(),
+                    stake: val,
+                    top_down_msgs: CAmt::new(rt.store())?,
+                    circ_supply: TokenAmount::zero(),
+                    status: Status::Active,
+                    nonce: 0,
+                    prev_checkpoint: Checkpoint::default(),
+                };
+                set_subnet(subnets, &id, subnet)?;
+                Ok(true)
+            }
+        })?;
+
+        if inserted {
+            self.total_subnets += 1;
+        }
+        Ok(())
     }
 
     /// Remove a subnet from the map of subnets and flush.
@@ -116,14 +125,16 @@ impl State {
         store: &BS,
         id: &SubnetID,
     ) -> anyhow::Result<()> {
-        // XXX: Is the update going to fail if the subnet doesn't exist?
-        self.total_subnets -= 1;
-        self.subnets.update(store, |subnets| {
+        let deleted = self.subnets.modify(store, |subnets| {
             subnets
                 .delete(&id.to_bytes())
                 .map_err(|e| e.downcast_wrap(format!("failed to delete subnet for id {}", id)))
-                .map(|_| ())
-        })
+                .map(|x| x.is_some())
+        })?;
+        if deleted {
+            self.total_subnets -= 1;
+        }
+        Ok(())
     }
 
     /// flush a subnet
