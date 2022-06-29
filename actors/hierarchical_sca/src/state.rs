@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::atomic::AtomicExec;
-use crate::tcid::{CAmt, CHamt};
+use crate::tcid::{TAmt, TCid, THamt};
 
 use super::checkpoint::*;
 use super::cross::*;
@@ -33,16 +33,16 @@ pub struct State {
     pub total_subnets: u64,
     #[serde(with = "bigint_ser")]
     pub min_stake: TokenAmount,
-    pub subnets: CHamt<Cid, Subnet>,
+    pub subnets: TCid<THamt<Cid, Subnet>>,
     pub check_period: ChainEpoch,
-    pub checkpoints: CHamt<ChainEpoch, Checkpoint>,
-    pub check_msg_registry: CHamt<Cid, CrossMsgs>,
+    pub checkpoints: TCid<THamt<ChainEpoch, Checkpoint>>,
+    pub check_msg_registry: TCid<THamt<Cid, CrossMsgs>>,
     pub nonce: u64,
     pub bottomup_nonce: u64,
-    pub bottomup_msg_meta: CAmt<CrossMsgMeta, CROSSMSG_AMT_BITWIDTH>,
+    pub bottomup_msg_meta: TCid<TAmt<CrossMsgMeta, CROSSMSG_AMT_BITWIDTH>>,
     pub applied_bottomup_nonce: u64,
     pub applied_topdown_nonce: u64,
-    pub atomic_exec_registry: CHamt<Cid, AtomicExec>,
+    pub atomic_exec_registry: TCid<THamt<Cid, AtomicExec>>,
 }
 
 lazy_static! {
@@ -57,19 +57,19 @@ impl State {
             network_name: SubnetID::from_str(&params.network_name)?,
             total_subnets: Default::default(),
             min_stake: MIN_SUBNET_COLLATERAL.clone(),
-            subnets: CHamt::new(store)?,
+            subnets: TCid::new_hamt(store)?,
             check_period: match params.checkpoint_period > DEFAULT_CHECKPOINT_PERIOD {
                 true => params.checkpoint_period,
                 false => DEFAULT_CHECKPOINT_PERIOD,
             },
-            checkpoints: CHamt::new(store)?,
-            check_msg_registry: CHamt::new(store)?,
+            checkpoints: TCid::new_hamt(store)?,
+            check_msg_registry: TCid::new_hamt(store)?,
             nonce: Default::default(),
             bottomup_nonce: Default::default(),
-            bottomup_msg_meta: CAmt::new(store)?,
+            bottomup_msg_meta: TCid::new_amt(store)?,
             applied_bottomup_nonce: MAX_NONCE,
             applied_topdown_nonce: Default::default(),
-            atomic_exec_registry: CHamt::new(store)?,
+            atomic_exec_registry: TCid::new_hamt(store)?,
         })
     }
 
@@ -102,7 +102,7 @@ impl State {
                 let subnet = Subnet {
                     id: id.clone(),
                     stake: val,
-                    top_down_msgs: CAmt::new(rt.store())?,
+                    top_down_msgs: TCid::new_amt(rt.store())?,
                     circ_supply: TokenAmount::zero(),
                     status: Status::Active,
                     nonce: 0,

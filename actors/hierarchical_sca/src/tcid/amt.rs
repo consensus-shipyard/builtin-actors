@@ -1,12 +1,10 @@
 use std::any::type_name;
 use std::marker::PhantomData;
 
-use crate::{tcid_ops, tcid_serde};
+use crate::tcid_ops;
 
 use super::TCid;
 use anyhow::{anyhow, Result};
-use cid::multihash::Code;
-use cid::Cid;
 use fil_actors_runtime::fvm_ipld_amt::Amt;
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use serde::de::DeserializeOwned;
@@ -19,21 +17,21 @@ const AMT_BIT_WIDTH: u32 = 3;
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::CAmt;
+/// use fil_actor_hierarchical_sca::tcid::{TCid, TAmt};
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;
 ///
 /// #[derive(Serialize_tuple, Deserialize_tuple)]
 /// struct MyType {
-///   my_field: CAmt<String>
+///   my_field: TCid<TAmt<String>>
 /// }
 /// impl Cbor for MyType {}
 ///
 /// let store = MemoryBlockstore::new();
 ///
 /// let mut my_inst = MyType {
-///   my_field: CAmt::new(&store).unwrap()
+///   my_field: TCid::new_amt(&store).unwrap()
 /// };
 ///
 /// my_inst.my_field.update(&store, |x| {
@@ -43,33 +41,16 @@ const AMT_BIT_WIDTH: u32 = 3;
 /// assert_eq!(&"bar", my_inst.my_field.load(&store).unwrap().get(0).unwrap().unwrap())
 /// ```
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct CAmt<V, const W: u32 = AMT_BIT_WIDTH> {
-    cid: Cid,
+pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
     _phantom_v: PhantomData<V>,
 }
 
-impl<V, const W: u32> From<Cid> for CAmt<V, W> {
-    fn from(cid: Cid) -> Self {
-        CAmt { cid, _phantom_v: PhantomData }
-    }
-}
-
-impl<V, const W: u32> TCid for CAmt<V, W> {
-    fn cid(&self) -> Cid {
-        self.cid
-    }
-
-    fn code(&self) -> Code {
-        Code::Blake2b256
-    }
-}
-
-impl<V, const W: u32> CAmt<V, W>
+impl<V, const W: u32> TCid<TAmt<V, W>>
 where
     V: Serialize + DeserializeOwned,
 {
     /// Initialize an empty data structure, flush it to the store and capture the `Cid`.
-    pub fn new<S: Blockstore>(store: &S) -> Result<Self> {
+    pub fn new_amt<S: Blockstore>(store: &S) -> Result<Self> {
         let cid = Amt::<V, _>::new_with_bit_width(store, W)
             .flush()
             .map_err(|e| anyhow!("Failed to create empty array: {}", e))?;
@@ -90,21 +71,20 @@ where
     }
 }
 
-tcid_serde!(CAmt<V, W const: u32>);
-tcid_ops!(CAmt<V : Serialize + DeserializeOwned, W const: u32> => Amt<V, &'s S>);
+tcid_ops!(TAmt<V : Serialize + DeserializeOwned, W const: u32> => Amt<V, &'s S>);
 
 /// This `Default` implementation is unsound in that while it
-/// creates `CAmt` instances with a correct `Cid` value, this value
+/// creates `TAmt` instances with a correct `Cid` value, this value
 /// is not stored anywhere, so there is no guarantee that any retrieval
 /// attempt from a random store won't fail.
 ///
 /// The main purpose is to allow the `#[derive(Default)]` to be
-/// applied on types that use a `CAmt` field, if that's unavoidable.
-impl<V, const W: u32> Default for CAmt<V, W>
+/// applied on types that use a `TAmt` field, if that's unavoidable.
+impl<V, const W: u32> Default for TCid<TAmt<V, W>>
 where
     V: Serialize + DeserializeOwned,
 {
     fn default() -> Self {
-        Self::new(&MemoryBlockstore::new()).unwrap()
+        Self::new_amt(&MemoryBlockstore::new()).unwrap()
     }
 }
