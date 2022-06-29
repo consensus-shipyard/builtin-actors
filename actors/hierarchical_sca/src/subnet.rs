@@ -42,7 +42,7 @@ impl Subnet {
     pub(crate) fn add_stake<BS, RT>(
         &mut self,
         rt: &RT,
-        st: &mut State,
+        st: &mut State<BS>,
         value: &TokenAmount,
     ) -> anyhow::Result<()>
     where

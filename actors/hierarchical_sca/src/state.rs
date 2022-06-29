@@ -16,6 +16,7 @@ use fvm_shared::error::ExitCode;
 use lazy_static::lazy_static;
 use num_traits::Zero;
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 use crate::atomic::AtomicExec;
@@ -28,7 +29,7 @@ use super::types::*;
 
 /// Storage power actor state
 #[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct State {
+pub struct State<BS: Blockstore> {
     pub network_name: SubnetID,
     pub total_subnets: u64,
     #[serde(with = "bigint_ser")]
@@ -43,16 +44,17 @@ pub struct State {
     pub applied_bottomup_nonce: u64,
     pub applied_topdown_nonce: u64,
     pub atomic_exec_registry: TCid<THamt<Cid, AtomicExec>>,
+    _phantom_bs: PhantomData<BS>,
 }
 
 lazy_static! {
     static ref MIN_SUBNET_COLLATERAL: BigInt = TokenAmount::from(MIN_COLLATERAL_AMOUNT);
 }
 
-impl Cbor for State {}
+impl<BS: Blockstore> Cbor for State<BS> {}
 
-impl State {
-    pub fn new<BS: Blockstore>(store: &BS, params: ConstructorParams) -> anyhow::Result<State> {
+impl<BS: Blockstore> State<BS> {
+    pub fn new(store: &BS, params: ConstructorParams) -> anyhow::Result<State<BS>> {
         Ok(State {
             network_name: SubnetID::from_str(&params.network_name)?,
             total_subnets: Default::default(),
@@ -70,24 +72,20 @@ impl State {
             applied_bottomup_nonce: MAX_NONCE,
             applied_topdown_nonce: Default::default(),
             atomic_exec_registry: TCid::new_hamt(store)?,
+            _phantom_bs: PhantomData,
         })
     }
 
     /// Get content for a child subnet.
-    pub fn get_subnet<BS: Blockstore>(
-        &self,
-        store: &BS,
-        id: &SubnetID,
-    ) -> anyhow::Result<Option<Subnet>> {
+    pub fn get_subnet(&self, store: &BS, id: &SubnetID) -> anyhow::Result<Option<Subnet>> {
         let subnets = self.subnets.load(store)?;
         let subnet = get_subnet(&subnets, id)?;
         Ok(subnet.cloned())
     }
 
     /// Register a subnet in the map of subnets and flush.
-    pub(crate) fn register_subnet<BS, RT>(&mut self, rt: &RT, id: &SubnetID) -> anyhow::Result<()>
+    pub(crate) fn register_subnet<RT>(&mut self, rt: &RT, id: &SubnetID) -> anyhow::Result<()>
     where
-        BS: Blockstore,
         RT: Runtime<BS>,
     {
         let val = rt.message().value_received();
@@ -120,11 +118,7 @@ impl State {
     }
 
     /// Remove a subnet from the map of subnets and flush.
-    pub(crate) fn rm_subnet<BS: Blockstore>(
-        &mut self,
-        store: &BS,
-        id: &SubnetID,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn rm_subnet(&mut self, store: &BS, id: &SubnetID) -> anyhow::Result<()> {
         let deleted = self.subnets.modify(store, |subnets| {
             subnets
                 .delete(&id.to_bytes())
@@ -138,25 +132,17 @@ impl State {
     }
 
     /// flush a subnet
-    pub(crate) fn flush_subnet<BS: Blockstore>(
-        &mut self,
-        store: &BS,
-        sub: &Subnet,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn flush_subnet(&mut self, store: &BS, sub: &Subnet) -> anyhow::Result<()> {
         self.subnets.update(store, |subnets| set_subnet(subnets, &sub.id, sub.clone()))
     }
 
     /// flush a checkpoint
-    pub(crate) fn flush_checkpoint<BS: Blockstore>(
-        &mut self,
-        store: &BS,
-        ch: &Checkpoint,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn flush_checkpoint(&mut self, store: &BS, ch: &Checkpoint) -> anyhow::Result<()> {
         self.checkpoints.update(store, |checkpoints| set_checkpoint(checkpoints, ch.clone()))
     }
 
     /// get checkpoint being populated in the current window.
-    pub fn get_window_checkpoint<'m, BS: Blockstore>(
+    pub fn get_window_checkpoint<'m>(
         &self,
         store: &'m BS,
         epoch: ChainEpoch,
@@ -176,7 +162,7 @@ impl State {
     }
 
     /// apply the cross-messages included in a checkpoint.
-    pub(crate) fn apply_check_msgs<'m, BS: Blockstore>(
+    pub(crate) fn apply_check_msgs<'m>(
         &mut self,
         store: &'m BS,
         sub: &mut Subnet,
@@ -207,7 +193,7 @@ impl State {
 
     /// aggregate child message meta that are not directed for the current
     /// subnet to propagate them further.
-    pub(crate) fn agg_child_msgmeta<BS: Blockstore>(
+    pub(crate) fn agg_child_msgmeta(
         &mut self,
         store: &BS,
         ch: &mut Checkpoint,
@@ -245,7 +231,7 @@ impl State {
 
     /// store a cross message in the current checkpoint for propagation
     // TODO: We can probably de-duplicate a lot of code from agg_child_msgmeta
-    pub(crate) fn store_msg_in_checkpoint<BS: Blockstore>(
+    pub(crate) fn store_msg_in_checkpoint(
         &mut self,
         store: &BS,
         msg: &StorableMsg,
@@ -285,7 +271,7 @@ impl State {
     }
 
     /// append crossmsg_meta to a specific mesasge meta.
-    pub(crate) fn append_metas_to_meta<BS: Blockstore>(
+    pub(crate) fn append_metas_to_meta(
         &mut self,
         store: &BS,
         meta_cid: &Cid,
@@ -311,7 +297,7 @@ impl State {
     /// append crossmsg to a specific mesasge meta.
     // TODO: Consider de-duplicating code from append_metas_to_meta
     // if possible
-    pub(crate) fn append_msg_to_meta<BS: Blockstore>(
+    pub(crate) fn append_msg_to_meta(
         &mut self,
         store: &BS,
         meta_cid: &Cid,
@@ -340,7 +326,7 @@ impl State {
     ///
     /// This is triggered through bottom-up messages sending subnet tokens
     /// to some other subnet in the hierarchy.
-    pub(crate) fn release_circ_supply<BS: Blockstore>(
+    pub(crate) fn release_circ_supply(
         &mut self,
         store: &BS,
         curr: &mut Subnet,
@@ -367,7 +353,7 @@ impl State {
     }
 
     /// store bottomup messages for their execution in the subnet
-    pub(crate) fn store_bottomup_msg<BS: Blockstore>(
+    pub(crate) fn store_bottomup_msg(
         &mut self,
         store: &BS,
         meta: &CrossMsgMeta,
@@ -383,7 +369,7 @@ impl State {
     }
 
     /// commit topdown messages for their execution in the subnet
-    pub(crate) fn commit_topdown_msg<BS: Blockstore>(
+    pub(crate) fn commit_topdown_msg(
         &mut self,
         store: &BS,
         msg: &mut StorableMsg,
@@ -422,7 +408,7 @@ impl State {
     }
 
     /// commit bottomup messages for their execution in the subnet
-    pub(crate) fn commit_bottomup_msg<BS: Blockstore>(
+    pub(crate) fn commit_bottomup_msg(
         &mut self,
         store: &BS,
         msg: &StorableMsg,
@@ -437,7 +423,7 @@ impl State {
     }
 
     /// commits a cross-msg for propagation
-    pub(crate) fn send_cross<BS: Blockstore>(
+    pub(crate) fn send_cross(
         &mut self,
         store: &BS,
         msg: &mut StorableMsg,

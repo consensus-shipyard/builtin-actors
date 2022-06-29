@@ -5,6 +5,7 @@ use cid::Cid;
 use fil_actors_runtime::test_utils::expect_abort;
 use fil_actors_runtime::Array;
 use fvm_ipld_blockstore::Blockstore;
+use fvm_ipld_blockstore::MemoryBlockstore;
 use fvm_ipld_encoding::RawBytes;
 use fvm_shared::address::subnet::ROOTNET_ID;
 use fvm_shared::address::{Address, SubnetID};
@@ -88,7 +89,7 @@ impl Harness {
 
     pub fn construct_and_verify(&self, rt: &mut MockRuntime) {
         self.construct(rt);
-        let st: State = rt.get_state();
+        let st: State<MemoryBlockstore> = rt.get_state();
         let store = &rt.store;
 
         let empty_bottomup_array =
@@ -371,7 +372,7 @@ impl Harness {
         rt.call::<SCAActor>(Method::Release as MethodNum, &RawBytes::default()).unwrap();
         rt.verify();
 
-        let st: State = rt.get_state();
+        let st: State<MemoryBlockstore> = rt.get_state();
 
         let parent = &self.net_name.parent().unwrap();
         let from = Address::new_hierarchical(&self.net_name, &BURNT_FUNDS_ACTOR_ADDR).unwrap();
@@ -463,7 +464,7 @@ impl Harness {
             .unwrap();
         rt.verify();
 
-        let st: State = rt.get_state();
+        let st: State<MemoryBlockstore> = rt.get_state();
         if is_bu {
             let from = Address::new_hierarchical(&self.net_name, &TEST_BLS).unwrap();
             let to = Address::new_hierarchical(&dest, &to).unwrap();
@@ -523,7 +524,7 @@ impl Harness {
             nonce: msg_nonce,
         };
 
-        let st: State = rt.get_state();
+        let st: State<MemoryBlockstore> = rt.get_state();
         let sto = params.to.subnet().unwrap();
         let rto = to.raw_addr().unwrap();
 
@@ -557,7 +558,7 @@ impl Harness {
                 &RawBytes::serialize(params).unwrap(),
             )?;
             rt.verify();
-            let st: State = rt.get_state();
+            let st: State<MemoryBlockstore> = rt.get_state();
             assert_eq!(st.applied_bottomup_nonce, msg_nonce);
         } else {
             let rew_params =
@@ -585,7 +586,7 @@ impl Harness {
                 &RawBytes::serialize(params).unwrap(),
             )?;
             rt.verify();
-            let st: State = rt.get_state();
+            let st: State<MemoryBlockstore> = rt.get_state();
             assert_eq!(st.applied_topdown_nonce, msg_nonce + 1);
 
             if sto != st.network_name {
@@ -610,7 +611,7 @@ impl Harness {
     }
 
     pub fn get_subnet(&self, rt: &MockRuntime, id: &SubnetID) -> Option<Subnet> {
-        let st: State = rt.get_state();
+        let st: State<MemoryBlockstore> = rt.get_state();
         let subnets = st.subnets.load(rt.store()).unwrap();
         subnets.get(&id.to_bytes()).unwrap().cloned()
     }

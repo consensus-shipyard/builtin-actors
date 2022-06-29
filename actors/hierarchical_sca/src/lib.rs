@@ -82,7 +82,7 @@ impl Actor {
         rt.validate_immediate_caller_type(std::iter::once(&Type::Subnet))?;
         let subnet_addr = rt.message().caller();
         let mut shid = SubnetID::default();
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             shid = SubnetID::new(&st.network_name, subnet_addr);
             let sub = st.get_subnet(rt.store(), &shid).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnet")
@@ -125,7 +125,7 @@ impl Actor {
             return Err(actor_error!(illegal_argument, "no stake to add"));
         }
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             let shid = SubnetID::new(&st.network_name, subnet_addr);
             let sub = st.get_subnet(rt.store(), &shid).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnet")
@@ -168,7 +168,7 @@ impl Actor {
         }
         let send_val = params.value.clone();
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             let shid = SubnetID::new(&st.network_name, subnet_addr);
             let sub = st.get_subnet(rt.store(), &shid).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnet")
@@ -222,7 +222,7 @@ impl Actor {
         let subnet_addr = rt.message().caller();
         let mut send_val = TokenAmount::zero();
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             let shid = SubnetID::new(&st.network_name, subnet_addr);
             let sub = st.get_subnet(rt.store(), &shid).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnet")
@@ -284,7 +284,7 @@ impl Actor {
         }
 
         let mut burn_value = TokenAmount::zero();
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             let shid = SubnetID::new(&st.network_name, subnet_addr);
             let sub = st.get_subnet(rt.store(), &shid).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "failed to load subnet")
@@ -402,7 +402,7 @@ impl Actor {
 
         let sig_addr = resolve_secp_bls(rt, rt.message().caller())?;
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             // Create fund message
             let mut f_msg = StorableMsg::new_fund_msg(&params, &sig_addr, value).map_err(|e| {
                 e.downcast_default(ExitCode::USR_ILLEGAL_STATE, "error creating fund cross-message")
@@ -440,7 +440,7 @@ impl Actor {
         // burn funds that are being released
         rt.send(*BURNT_FUNDS_ACTOR_ADDR, METHOD_SEND, RawBytes::default(), value.clone())?;
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             // Create release message
             let r_msg = StorableMsg::new_release_msg(&st.network_name, &sig_addr, value, st.nonce)
                 .map_err(|e| {
@@ -487,7 +487,7 @@ impl Actor {
         // now. Consider supporting also send-cross messages initiated by actors.
         let sig_addr = resolve_secp_bls(rt, rt.message().caller())?;
 
-        rt.transaction(|st: &mut State, rt| {
+        rt.transaction(|st: &mut State<BS>, rt| {
             if params.destination == st.network_name {
             return Err(actor_error!(
                 illegal_argument,
@@ -543,7 +543,7 @@ impl Actor {
         // FIXME: We just need the state to check the current network name, but we are
         // picking up the whole state. Is it more efficient in terms of performance and
         // gas usage to check how to apply the message (b-u or t-p) inside rt.transaction?
-        let st: State = rt.state()?;
+        let st: State<BS> = rt.state()?;
         let mut msg = params.clone();
         let rto = match msg.to.raw_addr() {
             Ok(to) => to,
@@ -558,7 +558,7 @@ impl Actor {
         match msg.apply_type(&st.network_name) {
             Ok(HCMsgType::BottomUp) => {
                 // perform state transition
-                rt.transaction(|st: &mut State, rt| {
+                rt.transaction(|st: &mut State<BS>, rt| {
                     st.bottomup_state_transition(&msg).map_err(|e| {
                         e.downcast_default(
                             ExitCode::USR_ILLEGAL_STATE,
@@ -592,7 +592,7 @@ impl Actor {
                     TokenAmount::zero(),
                 )?;
 
-                rt.transaction(|st: &mut State, rt| {
+                rt.transaction(|st: &mut State<BS>, rt| {
                     // perform nonce state transition
                     if st.applied_topdown_nonce != msg.nonce {
                         return Err(actor_error!(

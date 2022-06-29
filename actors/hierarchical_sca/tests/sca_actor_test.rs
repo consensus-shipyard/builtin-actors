@@ -4,6 +4,7 @@ use fil_actor_hierarchical_sca::{
 };
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
+use fvm_ipld_blockstore::MemoryBlockstore;
 use fvm_shared::address::subnet::ROOTNET_ID;
 use fvm_shared::address::{Address, SubnetID};
 use fvm_shared::bigint::Zero;
@@ -32,7 +33,7 @@ fn register_subnet() {
     let mut value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -45,21 +46,21 @@ fn register_subnet() {
     // Registering an already existing subnet should fail
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::USR_ILLEGAL_ARGUMENT).unwrap();
     h.check_state();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
 
     // Registering without enough collateral.
     value = TokenAmount::from(10_u64.pow(17));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::USR_ILLEGAL_ARGUMENT).unwrap();
     h.check_state();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
 
     // Register additional subnet
     value = TokenAmount::from(12_i128.pow(18));
     h.register(&mut rt, &SUBNET_TWO, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 2);
     let shid = SubnetID::new(&h.net_name, *SUBNET_TWO);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -78,7 +79,7 @@ fn add_stake() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -119,7 +120,7 @@ fn release_stake() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -177,7 +178,7 @@ fn test_kill() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -189,7 +190,7 @@ fn test_kill() {
 
     // Add some stake
     h.kill(&mut rt, &shid, &value, ExitCode::OK).unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 0);
     assert!(h.get_subnet(&rt, &shid).is_none());
 }
@@ -202,7 +203,7 @@ fn checkpoint_commit() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -218,7 +219,7 @@ fn checkpoint_commit() {
     let ch = Checkpoint::new(shid.clone(), epoch + 9);
 
     h.commit_child_check(&mut rt, &shid, &ch, ExitCode::OK, TokenAmount::zero()).unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     let commit = st.get_window_checkpoint(rt.store(), epoch).unwrap();
     assert_eq!(commit.epoch(), DEFAULT_CHECKPOINT_PERIOD);
     let child_check = has_childcheck_source(&commit.data.children, &shid).unwrap();
@@ -234,7 +235,7 @@ fn checkpoint_commit() {
     let mut ch = Checkpoint::new(shid.clone(), epoch + 11);
     ch.data.prev_check = prev_cid;
     h.commit_child_check(&mut rt, &shid, &ch, ExitCode::OK, TokenAmount::zero()).unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     let commit = st.get_window_checkpoint(rt.store(), epoch).unwrap();
     assert_eq!(commit.epoch(), DEFAULT_CHECKPOINT_PERIOD);
     let child_check = has_childcheck_source(&commit.data.children, &shid).unwrap();
@@ -244,7 +245,7 @@ fn checkpoint_commit() {
     // Register second subnet
     h.register(&mut rt, &SUBNET_TWO, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 2);
     let shid_two = SubnetID::new(&h.net_name, *SUBNET_TWO);
     let subnet = h.get_subnet(&rt, &shid_two).unwrap();
@@ -268,7 +269,7 @@ fn checkpoint_commit() {
     let ch = Checkpoint::new(shid_two.clone(), epoch + 9);
 
     h.commit_child_check(&mut rt, &shid_two, &ch, ExitCode::OK, TokenAmount::zero()).unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     let commit = st.get_window_checkpoint(rt.store(), epoch).unwrap();
     assert_eq!(commit.epoch(), DEFAULT_CHECKPOINT_PERIOD);
     let child_check = has_childcheck_source(&commit.data.children, &shid_two).unwrap();
@@ -284,7 +285,7 @@ fn checkpoint_crossmsgs() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
@@ -327,7 +328,7 @@ fn checkpoint_crossmsgs() {
     );
 
     h.commit_child_check(&mut rt, &shid, &ch, ExitCode::OK, TokenAmount::zero()).unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     let commit = st.get_window_checkpoint(rt.store(), epoch).unwrap();
     assert_eq!(commit.epoch(), DEFAULT_CHECKPOINT_PERIOD);
     let child_check = has_childcheck_source(&commit.data.children, &shid).unwrap();
@@ -370,7 +371,7 @@ fn checkpoint_crossmsgs() {
     );
     h.commit_child_check(&mut rt, &shid, &ch, ExitCode::OK, 2 * TokenAmount::from(5_u64.pow(18)))
         .unwrap();
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     let commit = st.get_window_checkpoint(rt.store(), epoch).unwrap();
     assert_eq!(commit.epoch(), DEFAULT_CHECKPOINT_PERIOD);
     let child_check = has_childcheck_source(&commit.data.children, &shid).unwrap();
@@ -401,7 +402,7 @@ fn test_fund() {
     let value = TokenAmount::from(10_u64.pow(18));
     h.register(&mut rt, &SUBNET_ONE, &value, ExitCode::OK).unwrap();
 
-    let st: State = rt.get_state();
+    let st: State<MemoryBlockstore> = rt.get_state();
     assert_eq!(st.total_subnets, 1);
     let shid = SubnetID::new(&h.net_name, *SUBNET_ONE);
     let subnet = h.get_subnet(&rt, &shid).unwrap();
