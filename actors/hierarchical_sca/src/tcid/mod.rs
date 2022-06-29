@@ -14,15 +14,18 @@ pub trait CodeType {
     fn code() -> Code;
 }
 
+/// Marker trait for types that were meant to be used inside a TCid.
+pub trait TCidContent {}
+
 /// `TCid` is typed content, represented by a `Cid`.
 #[derive(PartialEq, Eq, Clone, Debug)]
-pub struct TCid<T, C = codes::Blake2b256> {
+pub struct TCid<T: TCidContent, C = codes::Blake2b256> {
     cid: Cid,
     _phantom_t: PhantomData<T>,
     _phantom_c: PhantomData<C>,
 }
 
-impl<T, C: CodeType> TCid<T, C> {
+impl<T: TCidContent, C: CodeType> TCid<T, C> {
     pub fn cid(&self) -> Cid {
         self.cid
     }
@@ -31,14 +34,14 @@ impl<T, C: CodeType> TCid<T, C> {
     }
 }
 
-impl<T, C> From<Cid> for TCid<T, C> {
+impl<T: TCidContent, C> From<Cid> for TCid<T, C> {
     fn from(cid: Cid) -> Self {
         TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData }
     }
 }
 
 /// Serializes exactly as its underlying `Cid`.
-impl<T, C> serde::Serialize for TCid<T, C> {
+impl<T: TCidContent, C> serde::Serialize for TCid<T, C> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -48,10 +51,7 @@ impl<T, C> serde::Serialize for TCid<T, C> {
 }
 
 /// Deserializes exactly as its underlying `Cid`.
-impl<'d, T, C> serde::Deserialize<'d> for TCid<T, C>
-where
-    Self: From<Cid>,
-{
+impl<'d, T: TCidContent, C> serde::Deserialize<'d> for TCid<T, C> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'d>,

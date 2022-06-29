@@ -10,7 +10,7 @@ use fvm_shared::HAMT_BIT_WIDTH;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 
-use super::TCid;
+use super::{TCid, TCidContent};
 
 /// Static typing information for HAMT fields, a.k.a. `Map`.
 ///
@@ -47,6 +47,8 @@ pub struct THamt<K, V, const W: u32 = HAMT_BIT_WIDTH> {
     _phantom_k: PhantomData<K>,
     _phantom_v: PhantomData<V>,
 }
+
+impl<K, V, const W: u32> TCidContent for THamt<K, V, W> {}
 
 impl<K, V, const W: u32> TCid<THamt<K, V, W>>
 where

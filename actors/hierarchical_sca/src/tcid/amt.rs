@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 
 use crate::tcid_ops;
 
-use super::TCid;
+use super::{TCid, TCidContent};
 use anyhow::{anyhow, Result};
 use fil_actors_runtime::fvm_ipld_amt::Amt;
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
@@ -44,6 +44,8 @@ const AMT_BIT_WIDTH: u32 = 3;
 pub struct TAmt<V, const W: u32 = AMT_BIT_WIDTH> {
     _phantom_v: PhantomData<V>,
 }
+
+impl<V, const W: u32> TCidContent for TAmt<V, W> {}
 
 impl<V, const W: u32> TCid<TAmt<V, W>>
 where

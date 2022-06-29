@@ -1,7 +1,7 @@
 use std::any::type_name;
 use std::marker::PhantomData;
 
-use super::{CodeType, TCid};
+use super::{CodeType, TCid, TCidContent};
 use crate::tcid_ops;
 use anyhow::{anyhow, Result};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
@@ -40,6 +40,8 @@ use std::ops::{Deref, DerefMut};
 pub struct TLink<T> {
     _phantom_t: PhantomData<T>,
 }
+
+impl<T> TCidContent for TLink<T> {}
 
 pub struct StoreContent<'s, S: Blockstore, T> {
     store: &'s S,
