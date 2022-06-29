@@ -1,21 +1,64 @@
+use std::marker::PhantomData;
+
 use cid::{multihash::Code, Cid};
 
 mod amt;
-mod cref;
 mod hamt;
-pub use amt::CAmt;
-pub use cref::CRef;
-pub use hamt::CHamt;
+mod link;
+pub use amt::TAmt;
+pub use hamt::THamt;
+pub use link::TLink;
 
 /// Helper type to be able to define `Code` as a generic parameter.
 pub trait CodeType {
     fn code() -> Code;
 }
 
+/// Marker trait for types that were meant to be used inside a TCid.
+pub trait TCidContent {}
+
 /// `TCid` is typed content, represented by a `Cid`.
-pub trait TCid: From<Cid> {
-    fn cid(&self) -> Cid;
-    fn code(&self) -> Code;
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct TCid<T: TCidContent, C = codes::Blake2b256> {
+    cid: Cid,
+    _phantom_t: PhantomData<T>,
+    _phantom_c: PhantomData<C>,
+}
+
+impl<T: TCidContent, C: CodeType> TCid<T, C> {
+    pub fn cid(&self) -> Cid {
+        self.cid
+    }
+    pub fn code(&self) -> Code {
+        C::code()
+    }
+}
+
+impl<T: TCidContent, C> From<Cid> for TCid<T, C> {
+    fn from(cid: Cid) -> Self {
+        TCid { cid, _phantom_t: PhantomData, _phantom_c: PhantomData }
+    }
+}
+
+/// Serializes exactly as its underlying `Cid`.
+impl<T: TCidContent, C> serde::Serialize for TCid<T, C> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.cid.serialize(serializer)
+    }
+}
+
+/// Deserializes exactly as its underlying `Cid`.
+impl<'d, T: TCidContent, C> serde::Deserialize<'d> for TCid<T, C> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'d>,
+    {
+        let cid = Cid::deserialize(deserializer)?;
+        Ok(Self::from(cid))
+    }
 }
 
 /// Assuming that the type implements `load` and `flush`, implement some convenience methods.
@@ -26,11 +69,18 @@ pub trait TCid: From<Cid> {
 #[macro_export]
 macro_rules! tcid_ops {
     (
-        $typ:ident < $($gen:ident $($const:ident)? $(: $b:ident $(+ $bs:ident)* )? ),+ > => $item:ty
+        $typ:ident <
+          $($gen:ident $($const:ident)? $(: $b:ident $(+ $bs:ident)* )? ),+
+        >
+        $(, $code:ident : $ct:ident)?
+        => $item:ty
     ) => {
         /// Operations on content types that, once loaded, are rooted
         /// and bound to a block store, and need to be flushed back.
-        impl< $($($const)? $gen $(: $b $(+ $bs)* )? ),+ > $typ<$($gen),+>
+        impl<
+          $($($const)? $gen $(: $b $(+ $bs)* )? ),+
+          $(, $code : $ct)?
+        > TCid<$typ<$($gen),+> $(, $code)?>
         {
             /// Load, modify and flush a value, returning something as a result.
             pub fn modify<'s, S: fvm_ipld_blockstore::Blockstore, R>(
@@ -51,41 +101,6 @@ macro_rules! tcid_ops {
                 f: impl FnOnce(&mut $item) -> anyhow::Result<()>,
             ) -> anyhow::Result<()> {
                 self.modify(store, f)
-            }
-        }
-    }
-}
-
-/// Define serde types for anything that implements `TCid`.
-///
-/// NOTE: For technical reasons the `const` keyword comes
-/// *after* the generic variable that it applies to.
-#[macro_export]
-macro_rules! tcid_serde {
-    (
-        $typ:ident < $($gen:ident $($const:ident)? $(: $b:ident $(+ $bs:ident)* )? ),+ >
-    ) => {
-        /// Serializes exactly as its underlying `Cid`.
-        impl < $($($const)? $gen $(: $b $(+ $bs)* )? ),+ > serde::Serialize for $typ<$($gen),+>
-        {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: serde::Serializer,
-            {
-                self.cid.serialize(serializer)
-            }
-        }
-
-        /// Deserializ exactly as its underlying `Cid`.
-        impl<'d, $($($const)? $gen $(: $b $(+ $bs)* )? ),+ > serde::Deserialize<'d> for $typ<$($gen),+>
-        where Self: From<Cid>
-        {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: serde::Deserializer<'d>,
-            {
-                let cid = Cid::deserialize(deserializer)?;
-                Ok(Self::from(cid))
             }
         }
     }
@@ -123,7 +138,7 @@ pub mod codes {
 
 #[cfg(test)]
 mod test {
-    use super::{CHamt, CRef, TCid};
+    use super::*;
     use cid::Cid;
     use fvm_ipld_blockstore::MemoryBlockstore;
     use fvm_ipld_encoding::tuple::*;
@@ -137,13 +152,13 @@ mod test {
 
     #[derive(Default, Serialize_tuple, Deserialize_tuple)]
     struct TestRecordTyped {
-        pub optional: Option<CRef<TestRecord>>,
-        pub map: CHamt<String, TestRecord>,
+        pub optional: Option<TCid<TLink<TestRecord>>>,
+        pub map: TCid<THamt<String, TestRecord>>,
     }
 
     impl TestRecordTyped {
         fn new(store: &MemoryBlockstore) -> Self {
-            Self { optional: None, map: CHamt::new(store).unwrap() }
+            Self { optional: None, map: TCid::new_hamt(store).unwrap() }
         }
     }
 
@@ -155,8 +170,8 @@ mod test {
 
     #[test]
     fn default_cid_and_default_hamt_differ() {
-        let cid_typed: CRef<TestRecordTyped> = CRef::default();
-        let cid_untyped: CRef<TestRecordUntyped> = CRef::default();
+        let cid_typed: TCid<TLink<TestRecordTyped>> = TCid::default();
+        let cid_untyped: TCid<TLink<TestRecordUntyped>> = TCid::default();
         // The stronger typing allows us to use proper default values,
         // but this is a breaking change from the invalid values that came before.
         assert_ne!(cid_typed.cid(), cid_untyped.cid());
@@ -164,7 +179,7 @@ mod test {
 
     #[test]
     fn default_value_read_fails() {
-        let cid_typed: CRef<TestRecordTyped> = CRef::default();
+        let cid_typed: TCid<TLink<TestRecordTyped>> = TCid::default();
         let store = MemoryBlockstore::new();
         assert!(cid_typed.load(&store).is_err());
     }
@@ -172,7 +187,8 @@ mod test {
     #[test]
     fn ref_modify() {
         let store = MemoryBlockstore::new();
-        let mut r: CRef<TestRecord> = CRef::new(&store, &TestRecord::default()).unwrap();
+        let mut r: TCid<TLink<TestRecord>> =
+            TCid::new_link(&store, &TestRecord::default()).unwrap();
 
         r.modify(&store, |c| {
             c.foo += 1;

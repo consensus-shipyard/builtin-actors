@@ -14,7 +14,7 @@ use fvm_shared::METHOD_SEND;
 use std::path::Path;
 
 use crate::checkpoint::CrossMsgMeta;
-use crate::tcid::{CAmt, CRef, TCid};
+use crate::tcid::{TAmt, TCid, TLink};
 
 /// StorableMsg stores all the relevant information required
 /// to execute cross-messages.
@@ -129,14 +129,14 @@ impl Cbor for CrossMsgs {}
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct MetaTag {
-    pub msgs_cid: CAmt<StorableMsg>,
-    pub meta_cid: CAmt<CrossMsgMeta>,
+    pub msgs_cid: TCid<TAmt<StorableMsg>>,
+    pub meta_cid: TCid<TAmt<CrossMsgMeta>>,
 }
 impl Cbor for MetaTag {}
 
 impl MetaTag {
     pub fn new<BS: Blockstore>(store: &BS) -> anyhow::Result<MetaTag> {
-        Ok(Self { msgs_cid: CAmt::new(store)?, meta_cid: CAmt::new(store)? })
+        Ok(Self { msgs_cid: TCid::new_amt(store)?, meta_cid: TCid::new_amt(store)? })
     }
 }
 
@@ -157,7 +157,7 @@ impl CrossMsgs {
             meta_array.batch_set(self.metas.clone()).map_err(|e| e.into())
         })?;
 
-        let meta_cid: CRef<MetaTag> = CRef::new(&store, &meta)?;
+        let meta_cid: TCid<TLink<MetaTag>> = TCid::new_link(&store, &meta)?;
 
         Ok(meta_cid.cid())
     }

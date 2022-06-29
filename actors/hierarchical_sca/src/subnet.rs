@@ -8,7 +8,7 @@ use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;
 
-use crate::tcid::CAmt;
+use crate::tcid::{TAmt, TCid};
 use crate::CROSSMSG_AMT_BITWIDTH;
 
 use super::checkpoint::*;
@@ -28,7 +28,7 @@ pub struct Subnet {
     pub id: SubnetID,
     #[serde(with = "bigint_ser")]
     pub stake: TokenAmount,
-    pub top_down_msgs: CAmt<StorableMsg, CROSSMSG_AMT_BITWIDTH>,
+    pub top_down_msgs: TCid<TAmt<StorableMsg, CROSSMSG_AMT_BITWIDTH>>,
     pub nonce: u64,
     #[serde(with = "bigint_ser")]
     pub circ_supply: TokenAmount,
