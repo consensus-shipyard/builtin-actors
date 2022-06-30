@@ -12,7 +12,7 @@ use fvm_shared::econ::TokenAmount;
 use crate::tcid::TCid;
 use crate::tcid::TLink;
 
-#[derive(Default, PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct Checkpoint {
     pub data: CheckData,
     #[serde(with = "serde_bytes")]
@@ -22,10 +22,7 @@ impl Cbor for Checkpoint {}
 
 impl Checkpoint {
     pub fn new(id: SubnetID, epoch: ChainEpoch) -> Self {
-        Self {
-            data: CheckData { source: id, epoch: epoch, ..Default::default() },
-            ..Default::default()
-        }
+        Self { data: CheckData::new(id, epoch), sig: Vec::new() }
     }
 
     /// return cid for the checkpoint
@@ -57,7 +54,7 @@ impl Checkpoint {
     }
 
     /// return the cid of the previous checkpoint this checkpoint points to.
-    pub fn prev_check(&self) -> &TCid<TLink<Checkpoint>> {
+    pub fn prev_check(&self) -> &Option<TCid<TLink<Checkpoint>>> {
         &self.data.prev_check
     }
 
@@ -118,15 +115,27 @@ impl Checkpoint {
     }
 }
 
-#[derive(Default, PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct CheckData {
     pub source: SubnetID,
     #[serde(with = "serde_bytes")]
     pub tip_set: Vec<u8>,
     pub epoch: ChainEpoch,
-    pub prev_check: TCid<TLink<Checkpoint>>,
+    pub prev_check: Option<TCid<TLink<Checkpoint>>>,
     pub children: Vec<ChildCheck>,
     pub cross_msgs: Vec<CrossMsgMeta>,
+}
+impl CheckData {
+    pub fn new(id: SubnetID, epoch: ChainEpoch) -> Self {
+        Self {
+            source: id,
+            tip_set: Vec::new(),
+            epoch,
+            prev_check: None,
+            children: Vec::new(),
+            cross_msgs: Vec::new(),
+        }
+    }
 }
 impl Cbor for CheckData {}
 

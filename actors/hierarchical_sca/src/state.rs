@@ -106,7 +106,7 @@ impl State {
                     circ_supply: TokenAmount::zero(),
                     status: Status::Active,
                     nonce: 0,
-                    prev_checkpoint: Checkpoint::default(),
+                    prev_checkpoint: None,
                 };
                 set_subnet(subnets, &id, subnet)?;
                 Ok(true)
