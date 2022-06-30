@@ -2,6 +2,8 @@ use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
+use fil_actor_hierarchical_sca::tcid::TCid;
+use fil_actor_hierarchical_sca::tcid::TCidContent;
 use fil_actors_runtime::test_utils::expect_abort;
 use fil_actors_runtime::Array;
 use fvm_ipld_blockstore::Blockstore;
@@ -629,8 +631,8 @@ pub fn has_childcheck_source<'a>(
     children.iter().find(|m| source == &m.source)
 }
 
-pub fn has_cid<'a>(children: &'a Vec<Cid>, cid: &Cid) -> bool {
-    children.iter().any(|c| c == cid)
+pub fn has_cid<'a, T: TCidContent>(children: &'a Vec<TCid<T>>, cid: &Cid) -> bool {
+    children.iter().any(|c| c.cid() == *cid)
 }
 
 pub fn add_msg_meta(

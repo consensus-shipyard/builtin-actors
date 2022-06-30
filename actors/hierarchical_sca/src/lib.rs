@@ -318,7 +318,7 @@ impl Actor {
                             ));
                         }
                         // check that the previous cid is consistent with the previous one
-                        if sub.prev_checkpoint.cid() != commit.prev_check() {
+                        if sub.prev_checkpoint.cid() != commit.prev_check().cid() {
                             return Err(actor_error!(
                                 illegal_argument,
                                 "previous checkpoint not consistente with previous one"
