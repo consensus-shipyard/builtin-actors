@@ -384,7 +384,7 @@ impl Harness {
         let chmeta = &ch.data.cross_msgs[chmeta_ind];
 
         let cross_reg = st.check_msg_registry.load(rt.store()).unwrap();
-        let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid).unwrap().unwrap();
+        let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid.cid()).unwrap().unwrap();
         let msg = meta.msgs[expected_nonce as usize].clone();
 
         assert_eq!(meta.msgs.len(), (expected_nonce + 1) as usize);
@@ -400,7 +400,7 @@ impl Harness {
             }
         }
 
-        Ok(chmeta.msgs_cid)
+        Ok(chmeta.msgs_cid.cid())
     }
 
     pub fn send_cross(
@@ -475,7 +475,7 @@ impl Harness {
             let chmeta = &ch.data.cross_msgs[chmeta_ind];
 
             let cross_reg = st.check_msg_registry.load(rt.store()).unwrap();
-            let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid).unwrap().unwrap();
+            let meta = get_cross_msgs(&cross_reg, &chmeta.msgs_cid.cid()).unwrap().unwrap();
             let msg = meta.msgs[nonce as usize].clone();
 
             assert_eq!(meta.msgs.len(), (nonce + 1) as usize);
@@ -643,7 +643,7 @@ pub fn add_msg_meta(
     value: TokenAmount,
 ) {
     let mh_code = Code::Blake2b256;
-    let c = Cid::new_v1(fvm_ipld_encoding::DAG_CBOR, mh_code.digest(&rand));
+    let c = TCid::from(Cid::new_v1(fvm_ipld_encoding::DAG_CBOR, mh_code.digest(&rand)));
     let meta =
         CrossMsgMeta { from: from.clone(), to: to.clone(), msgs_cid: c, nonce: 0, value: value };
     ch.append_msgmeta(meta).unwrap();

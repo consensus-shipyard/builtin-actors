@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{fmt::Display, marker::PhantomData};
 
 use cid::{multihash::Code, Cid};
 
@@ -58,6 +58,12 @@ impl<'d, T: TCidContent, C> serde::Deserialize<'d> for TCid<T, C> {
     {
         let cid = Cid::deserialize(deserializer)?;
         Ok(Self::from(cid))
+    }
+}
+
+impl<T: TCidContent, C> Display for TCid<T, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.cid.fmt(f)
     }
 }
 

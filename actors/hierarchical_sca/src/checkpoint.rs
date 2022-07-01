@@ -9,8 +9,8 @@ use fvm_shared::bigint::bigint_ser;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 
-use crate::tcid::TCid;
-use crate::tcid::TLink;
+use crate::tcid::{TCid, TLink};
+use crate::CrossMsgs;
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct Checkpoint {
@@ -143,7 +143,7 @@ impl Cbor for CheckData {}
 pub struct CrossMsgMeta {
     pub from: SubnetID,
     pub to: SubnetID,
-    pub msgs_cid: Cid,
+    pub msgs_cid: TCid<TLink<CrossMsgs>>,
     pub nonce: u64,
     #[serde(with = "bigint_ser")]
     pub value: TokenAmount,
