@@ -318,9 +318,7 @@ impl Actor {
                             ));
                         }
                         // check that the previous cid is consistent with the previous one
-                        if commit.prev_check().as_ref().map(|c| c.cid())
-                            != Some(prev_checkpoint.cid())
-                        {
+                        if commit.prev_check().cid() != prev_checkpoint.cid() {
                             return Err(actor_error!(
                                 illegal_argument,
                                 "previous checkpoint not consistente with previous one"

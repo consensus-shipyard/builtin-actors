@@ -54,7 +54,7 @@ impl Checkpoint {
     }
 
     /// return the cid of the previous checkpoint this checkpoint points to.
-    pub fn prev_check(&self) -> &Option<TCid<TLink<Checkpoint>>> {
+    pub fn prev_check(&self) -> &TCid<TLink<Checkpoint>> {
         &self.data.prev_check
     }
 
@@ -121,7 +121,7 @@ pub struct CheckData {
     #[serde(with = "serde_bytes")]
     pub tip_set: Vec<u8>,
     pub epoch: ChainEpoch,
-    pub prev_check: Option<TCid<TLink<Checkpoint>>>,
+    pub prev_check: TCid<TLink<Checkpoint>>,
     pub children: Vec<ChildCheck>,
     pub cross_msgs: Vec<CrossMsgMeta>,
 }
@@ -131,7 +131,7 @@ impl CheckData {
             source: id,
             tip_set: Vec::new(),
             epoch,
-            prev_check: None,
+            prev_check: TCid::default(),
             children: Vec::new(),
             cross_msgs: Vec::new(),
         }

@@ -191,12 +191,12 @@ mod test {
     }
 
     #[test]
-    fn default_cid_and_default_hamt_differ() {
+    fn default_cid_and_default_hamt_equal() {
         let cid_typed: TCid<TLink<TestRecordTyped>> = TCid::default();
         let cid_untyped: TCid<TLink<TestRecordUntyped>> = TCid::default();
         // The stronger typing allows us to use proper default values,
-        // but this is a breaking change from the invalid values that came before.
-        assert_ne!(cid_typed.cid(), cid_untyped.cid());
+        // but this should not be a breaking change, they should be treated as null pointers.
+        assert_eq!(cid_typed.cid(), cid_untyped.cid());
     }
 
     #[test]
