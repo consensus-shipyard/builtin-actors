@@ -89,6 +89,13 @@ macro_rules! tcid_ops {
           $(, $code : $ct)?
         > TCid<$typ<$($gen),+> $(, $code)?>
         {
+            /// Check that the underlying `Cid` is for the empty use case.
+            ///
+            /// What that means depends on the content.
+            pub fn is_default(&self) -> bool {
+                self.cid == Self::default().cid()
+            }
+
             /// Read the underlying `Cid` from the store or return a `ActorError::illegal_state` error if not found.
             /// Use this method for content that should have already been correctly initialized and maintained.
             /// For content that may not be present, consider using `maybe_load` instead.
