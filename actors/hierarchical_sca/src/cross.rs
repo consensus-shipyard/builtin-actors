@@ -57,14 +57,7 @@ impl StorableMsg {
             sig_addr,
         )?;
         let from = Address::new_hierarchical(sub_id, &BURNT_FUNDS_ACTOR_ADDR)?;
-        Ok(Self {
-            from: from,
-            to: to,
-            method: METHOD_SEND,
-            params: RawBytes::default(),
-            value: value,
-            nonce: nonce,
-        })
+        Ok(Self { from, to, method: METHOD_SEND, params: RawBytes::default(), value, nonce })
     }
 
     pub fn new_fund_msg(
@@ -80,14 +73,7 @@ impl StorableMsg {
             sig_addr,
         )?;
         let to = Address::new_hierarchical(sub_id, sig_addr)?;
-        Ok(Self {
-            from: from,
-            to: to,
-            method: METHOD_SEND,
-            params: RawBytes::default(),
-            value: value,
-            nonce: 0,
-        })
+        Ok(Self { from, to, method: METHOD_SEND, params: RawBytes::default(), value, nonce: 0 })
     }
 
     pub fn hc_type(&self) -> anyhow::Result<HCMsgType> {

@@ -1,65 +1,39 @@
-use crate::{
-    tcid::{TCid, THamt},
-    StorableMsg,
-};
+use crate::tcid::{TCid, THamt};
+use cid::multihash::Code::Blake2b256;
+use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fvm_ipld_encoding::repr::*;
-use fvm_ipld_encoding::{serde_bytes, tuple::*, Cbor, RawBytes};
+use fvm_ipld_encoding::{serde_bytes, tuple::*, Cbor, RawBytes, DAG_CBOR};
 use fvm_shared::MethodNum;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
-use std::collections::HashMap;
 
 pub const METHOD_LOCK: MethodNum = 2;
 pub const METHOD_MERGE: MethodNum = 3;
 pub const METHOD_ABORT: MethodNum = 4;
 pub const METHOD_UNLOCK: MethodNum = 5;
 
-#[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
-#[repr(u64)]
-pub enum ExecStatus {
-    UndefState,
-    Initialized,
-    Success,
-    Aborted,
-}
-
-#[derive(Serialize_tuple, Deserialize_tuple)]
+#[derive(PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple)]
 pub struct SerializedState {
     #[serde(with = "serde_bytes")]
     ser: Vec<u8>,
 }
-
-#[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct AtomicExec {
-    params: AtomicExecParams,
-    submitted: HashMap<String, Cid>,
-    status: ExecStatus,
+impl SerializedState {
+    pub fn cid(&self) -> Cid {
+        Cid::new_v1(DAG_CBOR, Blake2b256.digest(self.ser.as_slice()))
+    }
 }
-impl Cbor for AtomicExec {}
-
-#[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct SubmitExecParams {
-    cid: Cid,
-    abort: bool,
-    output: SerializedState, // TODO: LockedState
-}
-impl Cbor for SubmitExecParams {}
-
-#[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct AtomicExecParams {
-    messages: Vec<StorableMsg>,
-    inputs: HashMap<String, SerializedState>, // TODO: String/LockedState
-}
-impl Cbor for AtomicExecParams {}
 
 #[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct LockParams {
     pub method: MethodNum,
-    #[serde(with = "serde_bytes")]
-    pub params: Vec<u8>,
+    pub params: RawBytes,
 }
 impl Cbor for LockParams {}
+impl LockParams {
+    pub fn new(method: MethodNum, params: RawBytes) -> Self {
+        LockParams { method, params }
+    }
+}
 
 #[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct MergeParams<T: Serialize + DeserializeOwned> {
@@ -69,9 +43,15 @@ impl<T: Serialize + DeserializeOwned> Cbor for MergeParams<T> {}
 
 #[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct UnlockParams {
-    pub dummy: u64,
+    params: LockParams,
+    state: SerializedState, // FIXME: This is a locked state for the output. We may be able to use generics here.
 }
 impl Cbor for UnlockParams {}
+impl UnlockParams {
+    pub fn new(params: LockParams, state: SerializedState) -> Self {
+        UnlockParams { params, state }
+    }
+}
 
 #[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct LockedState<T: Serialize + DeserializeOwned> {
