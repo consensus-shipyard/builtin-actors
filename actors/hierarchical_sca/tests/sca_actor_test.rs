@@ -1,16 +1,23 @@
+use cid::multihash::Code;
+use cid::multihash::MultihashDigest;
 use cid::Cid;
+use fil_actor_hierarchical_sca::exec::{AtomicExecParams, LockedOutput, LockedStateInfo};
 use fil_actor_hierarchical_sca::tcid::TCid;
+use fil_actor_hierarchical_sca::StorableMsg;
 use fil_actor_hierarchical_sca::{
     get_bottomup_msg, subnet, Actor as SCAActor, Checkpoint, State, DEFAULT_CHECKPOINT_PERIOD,
 };
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
+use fvm_ipld_encoding::RawBytes;
+use fvm_ipld_encoding::DAG_CBOR;
 use fvm_shared::address::subnet::ROOTNET_ID;
 use fvm_shared::address::{Address, SubnetID};
 use fvm_shared::bigint::Zero;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
+use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::harness::*;
@@ -614,6 +621,97 @@ fn test_apply_msg() {
 }
 
 #[test]
+fn test_atomic_exec() {
+    let shid = SubnetID::new(&ROOTNET_ID, *SUBNET_ONE);
+    let (h, mut rt) = setup(shid.clone());
+
+    let caller_id = Address::new_id(1001);
+    let other_id = Address::new_id(1002);
+    let caller = AddressBundle::new(caller_id, *TEST_BLS);
+    let other = AddressBundle::new(other_id, *TEST_BLS2);
+
+    // register subnet
+    let sn1 = SubnetID::new(&shid, *SUBNET_ONE);
+    let sn2 = SubnetID::new(&shid, *SUBNET_TWO);
+
+    // register subnets
+    let reg_value = TokenAmount::from(10_u64.pow(18));
+    h.register(&mut rt, &SUBNET_ONE, &reg_value, ExitCode::OK).unwrap();
+    h.register(&mut rt, &SUBNET_TWO, &reg_value, ExitCode::OK).unwrap();
+
+    let params = AtomicExecParams {
+        msgs: gen_exec_msgs(other.id.clone()),
+        inputs: gen_locked_state(&sn1, &sn2, &caller.id, &other.id),
+    };
+    let exec_cid = params.cid().unwrap();
+
+    // initialize execution
+    h.init_atomic_exec(
+        &mut rt,
+        caller.clone(),
+        other.clone(),
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::OK,
+    )
+    .unwrap();
+
+    // initialize again and fail
+    h.init_atomic_exec(
+        &mut rt,
+        caller.clone(),
+        other.clone(),
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+
+    // caller submits output
+    // let perams
+    // h.submit_atomic_exec(&mut rt, caller.clone(), params, result, status, len_submitted, code)
+}
+
+#[test]
 fn test_noop() {
     // TODO: Implement tests of what happens if the application
+}
+
+fn gen_exec_msgs(addr: Address) -> Vec<StorableMsg> {
+    return vec![
+        StorableMsg {
+            from: addr,
+            to: addr,
+            value: TokenAmount::zero(),
+            method: 2,
+            params: RawBytes::default(),
+            nonce: 0,
+        },
+        StorableMsg {
+            from: addr,
+            to: addr,
+            value: TokenAmount::zero(),
+            method: 2,
+            params: RawBytes::default(),
+            nonce: 0,
+        },
+    ];
+}
+
+fn gen_locked_state(
+    sn1: &SubnetID,
+    sn2: &SubnetID,
+    caller: &Address,
+    other: &Address,
+) -> HashMap<String, LockedStateInfo> {
+    let lock_cid1 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test1"));
+    let lock_cid2 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test2"));
+    let addr1 = Address::new_hierarchical(sn1, caller).unwrap();
+    let addr2 = Address::new_hierarchical(sn2, other).unwrap();
+    let act1 = Address::new_id(900);
+    let act2 = Address::new_id(901);
+    let mut m = HashMap::<String, LockedStateInfo>::new();
+    m.insert(addr1.to_string(), LockedStateInfo { cid: lock_cid1, actor: act1 });
+    m.insert(addr2.to_string(), LockedStateInfo { cid: lock_cid2, actor: act2 });
+    m
 }

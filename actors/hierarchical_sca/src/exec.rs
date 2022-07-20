@@ -17,7 +17,7 @@ pub enum ExecStatus {
     Aborted,
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExec {
     pub params: AtomicExecParams,
     pub submitted: HashMap<String, Cid>,
@@ -35,7 +35,7 @@ impl AtomicExec {
     }
 }
 
-#[derive(PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct SubmitExecParams {
     pub cid: Cid,
     pub abort: bool,
@@ -43,7 +43,7 @@ pub struct SubmitExecParams {
 }
 impl Cbor for SubmitExecParams {}
 
-#[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExecParams {
     pub msgs: Vec<StorableMsg>,
     pub inputs: HashMap<String, LockedStateInfo>,
@@ -53,7 +53,7 @@ impl Cbor for AtomicExecParams {}
 /// Output of the initialization of an atomic execution.
 // FIXME: Can we probably return the CID directly without
 // wrapping it in an object (check Go interop)
-#[derive(PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockedOutput {
     pub cid: Cid,
 }
@@ -61,7 +61,7 @@ impl Cbor for LockedOutput {}
 
 /// Output for the submission of an atomic execution.
 /// It returns the state of the atomic execution after the submission.
-#[derive(PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct SubmitOutput {
     pub status: ExecStatus,
 }
@@ -70,7 +70,7 @@ impl Cbor for SubmitOutput {}
 /// Information to identify the locked state from an actor that is running an atomic
 /// execution. To locate some LockedState in a subnet the Cid of the locked state
 /// and the actor where it's been locked needs to be specified.
-#[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockedStateInfo {
     pub cid: Cid,
     pub actor: Address,

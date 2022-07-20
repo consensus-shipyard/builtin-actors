@@ -13,7 +13,6 @@ use fvm_shared::bigint::{bigint_ser, BigInt};
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
-use fvm_shared::MethodNum;
 use lazy_static::lazy_static;
 use num_traits::Zero;
 use std::collections::HashMap;
@@ -565,25 +564,30 @@ impl State {
         let from = Address::new_hierarchical(&self.network_name, &SYSTEM_ACTOR_ADDR)?;
         let to = Address::new_hierarchical(subnet, actor)?;
         let lock_params = atomic::LockParams::new(msg.method, msg.clone().params);
-        let mut method: MethodNum = MethodNum::default();
-        let mut enc: RawBytes = RawBytes::new(vec![]);
         if abort {
-            method = atomic::METHOD_ABORT;
-            enc = RawBytes::serialize(lock_params)?;
-        } else {
-            method = atomic::METHOD_UNLOCK;
-            let unlock_params = atomic::UnlockParams::new(lock_params, output);
-            enc = RawBytes::serialize(unlock_params)?;
+            let method = atomic::METHOD_ABORT;
+            let enc = RawBytes::serialize(lock_params)?;
+            return Ok(StorableMsg {
+                to,
+                from,
+                value: TokenAmount::zero(),
+                nonce: self.nonce,
+                method,
+                params: enc,
+            });
         }
 
-        Ok(StorableMsg {
+        let method = atomic::METHOD_UNLOCK;
+        let unlock_params = atomic::UnlockParams::new(lock_params, output);
+        let enc = RawBytes::serialize(unlock_params)?;
+        return Ok(StorableMsg {
             to,
             from,
             value: TokenAmount::zero(),
             nonce: self.nonce,
             method,
             params: enc,
-        })
+        });
     }
 }
 

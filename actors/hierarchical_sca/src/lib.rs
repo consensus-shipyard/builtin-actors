@@ -57,6 +57,7 @@ pub enum Method {
     SendCross = 9,
     ApplyMessage = 10,
     InitAtomicExec = 11,
+    SubmitAtomicExec = 12,
 }
 
 /// Subnet Coordinator Actor
@@ -684,7 +685,7 @@ impl Actor {
                     ));
                 }
                 // check if we are the common parent and entitle to execute the system.
-                if is_common_parent(&st.network_name, &params.inputs).map_err(|e| {
+                if !is_common_parent(&st.network_name, &params.inputs).map_err(|e| {
                         e.downcast_default(
                             ExitCode::USR_ILLEGAL_ARGUMENT,
                             "computing common parent for the execution",
@@ -920,6 +921,10 @@ impl ActorCode for Actor {
             }
             Some(Method::InitAtomicExec) => {
                 let res = Self::init_atomic_exec(rt, cbor::deserialize_params(params)?)?;
+                Ok(RawBytes::serialize(res)?)
+            }
+            Some(Method::SubmitAtomicExec) => {
+                let res = Self::submit_atomic_exec(rt, cbor::deserialize_params(params)?)?;
                 Ok(RawBytes::serialize(res)?)
             }
             None => Err(actor_error!(unhandled_message; "Invalid method")),
