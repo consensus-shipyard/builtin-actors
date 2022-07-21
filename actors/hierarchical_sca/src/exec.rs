@@ -10,15 +10,22 @@ use std::{collections::HashMap, str::FromStr};
 use crate::tcid::{TAmt, TCid, THamt, TLink};
 use crate::{atomic, StorableMsg};
 
+/// Status of an atomic execution
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
 #[repr(u64)]
 pub enum ExecStatus {
+    /// Oh, oh! something went wrong. This state should never appear.
     UndefState,
+    /// The atomic execution is initialized and waiting for the submission
+    /// of output states
     Initialized,
+    /// The execution succeeded.
     Success,
+    /// The execution was aborted.
     Aborted,
 }
 
+/// Data persisted in the SCA for the orchestration of atomic executions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExec {
     pub params: AtomicExecParams,
@@ -37,6 +44,7 @@ impl AtomicExec {
     }
 }
 
+/// Parameters used to submit the result of an atomic execution.
 #[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct SubmitExecParams {
     pub cid: Cid,
@@ -45,6 +53,9 @@ pub struct SubmitExecParams {
 }
 impl Cbor for SubmitExecParams {}
 
+/// Parameters to uniquely identify and describe an atomic execution.
+///
+/// The unique ID of an execution is determined by the CID of its parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExecParams {
     pub msgs: Vec<StorableMsg>,
@@ -109,7 +120,7 @@ impl AtomicExecParams {
             let addr = addr.raw_addr()?;
             let id_addr = match rt.resolve_address(&addr) {
                 Some(id) => id,
-                None => return Err(anyhow!("coudln't resolve id address in exec input")),
+                None => return Err(anyhow!("couldn't resolve id address in exec input")),
             };
             // Update with id_addr and subnet
             let sn_addr = Address::new_hierarchical(&sn, &id_addr)?;
