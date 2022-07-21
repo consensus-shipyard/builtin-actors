@@ -1,29 +1,38 @@
-use crate::tcid::{TCid, THamt};
 use cid::multihash::Code::Blake2b256;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
+use fil_actors_runtime::cbor;
 use fvm_ipld_encoding::{serde_bytes, tuple::*, Cbor, RawBytes, DAG_CBOR};
 use fvm_shared::MethodNum;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
+
+use crate::tcid::{TCid, THamt};
 
 pub const METHOD_LOCK: MethodNum = 2;
 pub const METHOD_MERGE: MethodNum = 3;
 pub const METHOD_ABORT: MethodNum = 4;
 pub const METHOD_UNLOCK: MethodNum = 5;
 
-#[derive(PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple, Default)]
 pub struct SerializedState {
     #[serde(with = "serde_bytes")]
     ser: Vec<u8>,
 }
 impl SerializedState {
+    // TODO: This is used for testing purposes in order to have all the
+    // SCA functions running. In the next iteration we will implement proper
+    // primitives to get from/to a LockableState to SerializedState using
+    // code-gen and generics.
+    pub fn new(ser: Vec<u8>) -> Self {
+        SerializedState { ser }
+    }
     pub fn cid(&self) -> Cid {
         Cid::new_v1(DAG_CBOR, Blake2b256.digest(self.ser.as_slice()))
     }
 }
 
-#[derive(Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockParams {
     pub method: MethodNum,
     pub params: RawBytes,
@@ -41,15 +50,18 @@ pub struct MergeParams<T: Serialize + DeserializeOwned> {
 }
 impl<T: Serialize + DeserializeOwned> Cbor for MergeParams<T> {}
 
-#[derive(Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
 pub struct UnlockParams {
-    params: LockParams,
-    state: SerializedState, // FIXME: This is a locked state for the output. We may be able to use generics here.
+    pub params: LockParams,
+    pub state: SerializedState, // FIXME: This is a locked state for the output. We may be able to use generics here.
 }
 impl Cbor for UnlockParams {}
 impl UnlockParams {
     pub fn new(params: LockParams, state: SerializedState) -> Self {
         UnlockParams { params, state }
+    }
+    pub fn from_raw_bytes(ser: &RawBytes) -> anyhow::Result<Self> {
+        Ok(cbor::deserialize_params(ser)?)
     }
 }
 

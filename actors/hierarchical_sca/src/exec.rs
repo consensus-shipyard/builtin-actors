@@ -1,5 +1,4 @@
-use crate::tcid::{TAmt, TCid, THamt, TLink};
-use crate::{atomic, resolve_secp_bls, StorableMsg};
+use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::{runtime::Runtime, ActorDowncast};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
@@ -7,6 +6,9 @@ use fvm_ipld_encoding::repr::*;
 use fvm_ipld_encoding::{tuple::*, Cbor};
 use fvm_shared::address::{Address, SubnetID};
 use std::{collections::HashMap, str::FromStr};
+
+use crate::tcid::{TAmt, TCid, THamt, TLink};
+use crate::{atomic, StorableMsg};
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
 #[repr(u64)]
@@ -105,7 +107,10 @@ impl AtomicExecParams {
             let addr = Address::from_str(&key)?;
             let sn = addr.subnet()?;
             let addr = addr.raw_addr()?;
-            let id_addr = resolve_secp_bls(rt, addr)?;
+            let id_addr = match rt.resolve_address(&addr) {
+                Some(id) => id,
+                None => return Err(anyhow!("coudln't resolve id address in exec input")),
+            };
             // Update with id_addr and subnet
             let sn_addr = Address::new_hierarchical(&sn, &id_addr)?;
             out.insert(sn_addr.to_string(), (*val).clone());

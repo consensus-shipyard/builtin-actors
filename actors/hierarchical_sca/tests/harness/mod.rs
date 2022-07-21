@@ -1,16 +1,25 @@
+use std::borrow::Borrow;
+use std::str::FromStr;
+
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::exec::AtomicExecParams;
-use fil_actor_hierarchical_sca::exec::ExecStatus;
-use fil_actor_hierarchical_sca::exec::LockedOutput;
-use fil_actor_hierarchical_sca::exec::SubmitExecParams;
-use fil_actor_hierarchical_sca::exec::SubmitOutput;
-use fil_actor_hierarchical_sca::tcid::TCid;
-use fil_actor_hierarchical_sca::tcid::TCidContent;
+use fil_actor_hierarchical_sca::atomic::UnlockParams;
+use fil_actor_hierarchical_sca::atomic::METHOD_ABORT;
+use fil_actor_hierarchical_sca::atomic::METHOD_UNLOCK;
+use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
+use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::test_utils::expect_abort;
+use fil_actors_runtime::test_utils::{
+    MockRuntime, ACCOUNT_ACTOR_CODE_ID, MULTISIG_ACTOR_CODE_ID, SUBNET_ACTOR_CODE_ID,
+    SYSTEM_ACTOR_CODE_ID,
+};
 use fil_actors_runtime::Array;
+use fil_actors_runtime::{
+    make_map_with_root_and_bitwidth, ActorError, Map, BURNT_FUNDS_ACTOR_ADDR, REWARD_ACTOR_ADDR,
+    SCA_ACTOR_ADDR, STORAGE_POWER_ACTOR_ADDR, SYSTEM_ACTOR_ADDR,
+};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::RawBytes;
 use fvm_shared::address::subnet::ROOTNET_ID;
@@ -24,21 +33,15 @@ use fvm_shared::METHOD_SEND;
 use lazy_static::lazy_static;
 
 use fil_actor_hierarchical_sca::checkpoint::ChildCheck;
+use fil_actor_hierarchical_sca::exec::{
+    AtomicExecParams, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
+};
 use fil_actor_hierarchical_sca::ext;
+use fil_actor_hierarchical_sca::tcid::{TCid, TCidContent};
 use fil_actor_hierarchical_sca::{
     get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
     CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
     DEFAULT_CHECKPOINT_PERIOD, MAX_NONCE, MIN_COLLATERAL_AMOUNT,
-};
-use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
-use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::test_utils::{
-    MockRuntime, ACCOUNT_ACTOR_CODE_ID, MULTISIG_ACTOR_CODE_ID, SUBNET_ACTOR_CODE_ID,
-    SYSTEM_ACTOR_CODE_ID,
-};
-use fil_actors_runtime::{
-    make_map_with_root_and_bitwidth, ActorError, Map, BURNT_FUNDS_ACTOR_ADDR, REWARD_ACTOR_ADDR,
-    SCA_ACTOR_ADDR, STORAGE_POWER_ACTOR_ADDR, SYSTEM_ACTOR_ADDR,
 };
 
 use crate::SCAActor;
@@ -48,8 +51,6 @@ lazy_static! {
     pub static ref SUBNET_TWO: Address = Address::new_id(102);
     pub static ref TEST_BLS: Address =
         Address::new_bls(&[1; fvm_shared::address::BLS_PUB_LEN]).unwrap();
-    pub static ref TEST_BLS2: Address =
-        Address::new_bls(&[2; fvm_shared::address::BLS_PUB_LEN]).unwrap();
     pub static ref ACTOR: Address = Address::new_actor("actor".as_bytes());
 }
 
@@ -617,13 +618,12 @@ impl Harness {
     pub fn init_atomic_exec(
         &self,
         rt: &mut MockRuntime,
-        caller: AddressBundle,
-        other: AddressBundle,
+        caller: &Address,
         params: AtomicExecParams,
         result: LockedOutput,
         code: ExitCode,
     ) -> Result<(), ActorError> {
-        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, caller.id);
+        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, *caller);
         rt.expect_validate_caller_type(vec![*ACCOUNT_ACTOR_CODE_ID, *MULTISIG_ACTOR_CODE_ID]);
 
         if code != ExitCode::OK {
@@ -637,25 +637,6 @@ impl Harness {
             rt.verify();
             return Ok(());
         }
-
-        // FIXME: The order of this expect_send depend on the order from
-        // which we read from a HashMap and it may make the test a bit flaky.
-        rt.expect_send(
-            caller.id,
-            ext::account::PUBKEY_ADDRESS_METHOD,
-            RawBytes::default(),
-            TokenAmount::zero(),
-            RawBytes::serialize(caller.key).unwrap(),
-            ExitCode::OK,
-        );
-        rt.expect_send(
-            other.id,
-            ext::account::PUBKEY_ADDRESS_METHOD,
-            RawBytes::default(),
-            TokenAmount::zero(),
-            RawBytes::serialize(other.key).unwrap(),
-            ExitCode::OK,
-        );
 
         let ret = rt
             .call::<SCAActor>(
@@ -678,14 +659,13 @@ impl Harness {
     pub fn submit_atomic_exec(
         &self,
         rt: &mut MockRuntime,
-        caller: AddressBundle,
+        caller: &Address,
         params: SubmitExecParams,
         result: SubmitOutput,
-        status: ExecStatus,
         len_submitted: usize,
         code: ExitCode,
     ) -> Result<(), ActorError> {
-        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, caller.id);
+        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, *caller);
         rt.expect_validate_caller_type(vec![*ACCOUNT_ACTOR_CODE_ID, *MULTISIG_ACTOR_CODE_ID]);
 
         if code != ExitCode::OK {
@@ -700,15 +680,6 @@ impl Harness {
             return Ok(());
         }
 
-        rt.expect_send(
-            caller.id,
-            ext::account::PUBKEY_ADDRESS_METHOD,
-            RawBytes::default(),
-            TokenAmount::zero(),
-            RawBytes::serialize(caller.key).unwrap(),
-            ExitCode::OK,
-        );
-
         let ret = rt
             .call::<SCAActor>(
                 Method::SubmitAtomicExec as MethodNum,
@@ -720,15 +691,27 @@ impl Harness {
 
         let st: State = rt.get_state();
         let exec = st.get_atomic_exec(rt.store(), &params.cid.into()).unwrap().unwrap();
-        assert_eq!(exec.status, status);
+        assert_eq!(exec.status, result.status);
         assert_eq!(exec.submitted.len(), len_submitted);
         assert_eq!(ret, result);
 
-        if exec.status == ExecStatus::Success {
-            panic!("TODO: check if the update message has been propagated to the right subnets");
+        if exec.status != ExecStatus::Initialized {
+            for (k, _) in exec.params.inputs.iter() {
+                let sn = Address::from_str(k).unwrap().subnet().unwrap();
+                let sub = st.get_subnet(rt.store(), &sn).unwrap().unwrap();
+                let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
+                let msg = get_topdown_msg(&crossmsgs, 0).unwrap().unwrap();
+                match exec.status {
+                    ExecStatus::Aborted => assert_eq!(msg.method, METHOD_ABORT),
+                    ExecStatus::Success => {
+                        assert_eq!(msg.method, METHOD_UNLOCK);
+                        let uparams = UnlockParams::from_raw_bytes(msg.params.borrow()).unwrap();
+                        assert_eq!(uparams.state, params.output);
+                    }
+                    _ => panic!("wrong method in cross-net message propagating atomic exec result"),
+                }
+            }
         }
-
-        // TODO: Add an additional atomic exec and list them to say that they're there
 
         Ok(())
     }
@@ -780,16 +763,4 @@ fn get_cross_msgs<'m, BS: Blockstore>(
     cid: &Cid,
 ) -> anyhow::Result<Option<&'m CrossMsgs>> {
     registry.get(&cid.to_bytes()).map_err(|e| anyhow!("error getting fross messages: {}", e))
-}
-
-/// Bundles an ID address with a key address for testing purposes
-#[derive(Clone)]
-pub struct AddressBundle {
-    pub id: Address,
-    pub key: Address,
-}
-impl AddressBundle {
-    pub fn new(id: Address, key: Address) -> Self {
-        AddressBundle { id, key }
-    }
 }

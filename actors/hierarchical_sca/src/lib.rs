@@ -742,7 +742,7 @@ impl Actor {
         RT: Runtime<BS>,
     {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
-        let caller = resolve_secp_bls(rt, rt.message().caller())?;
+        let caller = rt.message().caller();
         let mut out_status = ExecStatus::UndefState;
 
         rt.transaction(|st: &mut State, rt| {
@@ -771,7 +771,7 @@ impl Actor {
                     // check if the user is involved in the execution
                     if !is_addr_in_exec(&caller, &exec.params.inputs).map_err(|e| {
                         e.downcast_default(
-                            ExitCode::USR_ILLEGAL_STATE,
+                            ExitCode::USR_ILLEGAL_ARGUMENT,
                             "error checking if address is involved in the execution",
                         )
                     })? {
@@ -850,14 +850,22 @@ impl Actor {
                                 "error propagating execution result to subnets",
                             )
                         })?;
-                        // TODO: Clean the execution once is done? Then we need
-                        // to traverse several epochs if we want to have a commands
-                        // that prompts the user with the state of all the execution
-                        // (after succeeding or aborting). If we don't do this we need
-                        // a way to de-duplicate executions, because a user may abort an
-                        // execution and look to make it again (use the epoch?).
                     }
                     out_status = exec.status;
+                    // persist the execution
+                    st.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
+                        e.downcast_default(
+                            ExitCode::USR_ILLEGAL_STATE,
+                            "error putting aborted atomic execution in registry",
+                        )
+                    })?;
+
+                    // TODO: Clean the execution once is done? Then we need
+                    // to traverse several epochs if we want to have a commands
+                    // that prompts the user with the state of all the execution
+                    // (after succeeding or aborting). If we don't do this we need
+                    // a way to de-duplicate executions, because a user may abort an
+                    // execution and look to make it again (use the epoch?).
                 }
             };
             Ok(())
@@ -946,6 +954,6 @@ where
         RawBytes::default(),
         TokenAmount::zero(),
     )?;
-    let pub_key: Address = cbor::deserialize(&ret, "address response")?;
-    Ok(pub_key)
+    let id: Address = cbor::deserialize(&ret, "address response")?;
+    Ok(id)
 }
