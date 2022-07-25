@@ -14,15 +14,13 @@ use crate::{atomic, StorableMsg};
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
 #[repr(u64)]
 pub enum ExecStatus {
-    /// Oh, oh! something went wrong. This state should never appear.
-    UndefState,
     /// The atomic execution is initialized and waiting for the submission
     /// of output states
-    Initialized,
+    Initialized = 1,
     /// The execution succeeded.
-    Success,
+    Success = 2,
     /// The execution was aborted.
-    Aborted,
+    Aborted = 3,
 }
 
 /// Data persisted in the SCA for the orchestration of atomic executions.

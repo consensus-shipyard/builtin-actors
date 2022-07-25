@@ -743,7 +743,7 @@ impl Actor {
     {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
         let caller = rt.message().caller();
-        let mut out_status = ExecStatus::UndefState;
+        let mut out_status = ExecStatus::Initialized;
 
         rt.transaction(|st: &mut State, rt| {
             let cid = params.cid;

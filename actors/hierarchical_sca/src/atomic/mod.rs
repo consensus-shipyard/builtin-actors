@@ -29,7 +29,7 @@ pub const METHOD_UNLOCK: MethodNum = 5;
 /// Different strategies may be used to merge different locked state to
 /// prepare the actor state for the execution, and for the merging of the
 /// output of the execution to the original state of the actor.
-pub trait LockableState<S: Serialize + DeserializeOwned> {
+pub trait MergeableState<S: Serialize + DeserializeOwned> {
     /// Merge a locked state (not necessarily the output) to the current state.
     fn merge(&mut self, other: Self) -> anyhow::Result<()>;
     /// Merge the output of an execution to the current state.
@@ -40,20 +40,24 @@ pub trait LockableState<S: Serialize + DeserializeOwned> {
 /// atomic executions.
 pub trait LockableActorState<T>
 where
-    T: Serialize + DeserializeOwned + LockableState<T>,
+    T: Serialize + DeserializeOwned + MergeableState<T>,
 {
     /// Map with all the locked state in the actor uniquely identified through
     /// their Cid.
-    fn locked_map_cid() -> TCid<THamt<Cid, LockedState<T>>>;
+    fn locked_map_cid(&self) -> TCid<THamt<Cid, LockableState<T>>>;
     /// Returns the output state of an execution from the current state
     /// of the actor according to the input parameters.
-    fn output(params: LockParams) -> LockedState<T>;
+    fn output(&self, params: LockParams) -> LockableState<T>;
 }
 
 /// Trait for an actor able to support an atomic execution.
+///
+/// The functions of this trait represent the set of methods that
+/// and actor support atomic executions needs to implement. Correspondingly,
+/// it follows the same return convention used for every FVM actor method.
 pub trait LockableActor<T, S>
 where
-    T: Serialize + DeserializeOwned + LockableState<T>,
+    T: Serialize + DeserializeOwned + MergeableState<T>,
     S: Serialize + DeserializeOwned + LockableActorState<T>,
 {
     /// Locks the state to perform the execution determined by the locking params.
@@ -79,7 +83,7 @@ pub struct SerializedState {
 impl SerializedState {
     // TODO: This is used for testing purposes in order to have all the
     // SCA functions running. In the next iteration we will implement proper
-    // primitives to get from/to a LockableState to SerializedState using
+    // primitives to get from/to a MergeableState to SerializedState using
     // code-gen and generics.
     pub fn new(ser: Vec<u8>) -> Self {
         SerializedState { ser }
@@ -113,11 +117,11 @@ impl LockParams {
 #[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct MergeParams<T>
 where
-    T: Serialize + DeserializeOwned + LockableState<T>,
+    T: Serialize + DeserializeOwned + MergeableState<T>,
 {
     state: T,
 }
-impl<T: Serialize + DeserializeOwned + LockableState<T>> Cbor for MergeParams<T> {}
+impl<T: Serialize + DeserializeOwned + MergeableState<T>> Cbor for MergeParams<T> {}
 
 /// Unlock parameters that pass the output of the execution as the serialized
 /// output state of the execution, along with the lock parameters that determines
@@ -140,11 +144,11 @@ impl UnlockParams {
 
 /// State of an actor including a lock to support atomic executions.
 #[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct LockedState<T>
+pub struct LockableState<T>
 where
-    T: Serialize + DeserializeOwned + LockableState<T>,
+    T: Serialize + DeserializeOwned + MergeableState<T>,
 {
     lock: bool,
     state: T,
 }
-impl<T: Serialize + DeserializeOwned + LockableState<T>> Cbor for LockedState<T> {}
+impl<T: Serialize + DeserializeOwned + MergeableState<T>> Cbor for LockableState<T> {}
