@@ -31,9 +31,9 @@ pub const METHOD_UNLOCK: MethodNum = 5;
 /// output of the execution to the original state of the actor.
 pub trait LockableState<S: Serialize + DeserializeOwned> {
     /// Merge a locked state (not necessarily the output) to the current state.
-    fn merge(other: Self) -> anyhow::Result<()>;
+    fn merge(&mut self, other: Self) -> anyhow::Result<()>;
     /// Merge the output of an execution to the current state.
-    fn merge_output(other: Self) -> anyhow::Result<()>;
+    fn merge_output(&mut self, other: Self) -> anyhow::Result<()>;
 }
 
 /// Trait that specifies the interface of an actor state able to support
