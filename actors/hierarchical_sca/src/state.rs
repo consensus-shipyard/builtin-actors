@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::atomic;
-use crate::exec::{AtomicExec, AtomicExecParams, MetaExec};
+use crate::exec::{AtomicExec, AtomicExecParams, AtomicExecParamsMeta};
 use crate::tcid::{TAmt, TCid, THamt, TLink};
 
 use super::checkpoint::*;
@@ -495,7 +495,7 @@ impl State {
     pub fn set_atomic_exec<BS: Blockstore>(
         &mut self,
         store: &BS,
-        cid: &TCid<TLink<MetaExec>>,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
         exec: AtomicExec,
     ) -> anyhow::Result<()> {
         self.atomic_exec_registry.update(store, |registry| {
@@ -507,17 +507,32 @@ impl State {
         Ok(())
     }
 
+    pub fn rm_atomic_exec<BS: Blockstore>(
+        &mut self,
+        store: &BS,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
+    ) -> anyhow::Result<()> {
+        self.atomic_exec_registry.update(store, |registry| {
+            registry
+                .delete(&cid.cid().to_bytes())
+                .map_err(|e| e.downcast_wrap(format!("failed to delete atomic exec")))?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
     /// Propagates the result of an execution to the corresponding subnets
     /// in a cross-net message.
     pub fn propagate_exec_result<BS: Blockstore>(
         &mut self,
         store: &BS,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
         exec: &AtomicExec,
         output: atomic::SerializedState, /* FIXME: LockedState to propagate. The same as in SubmitAtomicExecParams*/
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
-        let ks: Vec<_> = exec.params.inputs.clone().into_keys().collect();
+        let ks: Vec<_> = exec.params().inputs.clone().into_keys().collect();
         let mut visited = HashMap::<SubnetID, bool>::new();
         for k in ks.iter() {
             let sn = k.subnet();
@@ -526,8 +541,9 @@ impl State {
                     continue;
                 }
                 None => {
+                    let p = exec.params();
                     // send cross-message
-                    let input = match exec.params.inputs.get(k) {
+                    let input = match p.inputs.get(k) {
                         Some(i) => i,
                         None => {
                             return Err(anyhow!(
@@ -535,19 +551,20 @@ impl State {
                             ))
                         }
                     };
-                    let mut msg = self.exec_result_msg(
-                        &sn,
-                        &input.actor,
-                        &exec.params.msgs[0],
-                        output.clone(),
-                        abort,
-                    )?;
+                    let mut msg =
+                        self.exec_result_msg(&sn, &input.actor, &p.msgs[0], output.clone(), abort)?;
                     self.send_cross(store, &mut msg, curr_epoch)?;
                     // mark as sent
                     visited.insert(sn, true);
                 }
             }
         }
+
+        // after propagating the execution result it is safe to remove the finalized execution
+        // from the registry. Users looking to list previous atomic executions, we'll need
+        // to inspect previous state (but this is a UX matter).
+        self.rm_atomic_exec(store, cid)?;
+
         Ok(())
     }
 

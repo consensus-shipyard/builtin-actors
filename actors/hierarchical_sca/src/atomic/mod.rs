@@ -50,6 +50,12 @@ where
     fn output(&self, params: LockParams) -> LockableState<T>;
 }
 
+/// Return type for all actor functions.
+///
+/// It returns an option for developers to optionally choose if
+/// to return an output in the function.
+type ActorResult = anyhow::Result<Option<RawBytes>>;
+
 /// Trait for an actor able to support an atomic execution.
 ///
 /// The functions of this trait represent the set of methods that
@@ -61,15 +67,15 @@ where
     S: Serialize + DeserializeOwned + LockableActorState<T>,
 {
     /// Locks the state to perform the execution determined by the locking params.
-    fn lock(params: LockParams) -> anyhow::Result<Option<RawBytes>>;
+    fn lock(params: LockParams) -> ActorResult;
     /// Merges some state to the current state of the actor to prepare for the execution
     /// of the protocol.
-    fn merge(params: MergeParams<T>) -> anyhow::Result<Option<RawBytes>>;
+    fn merge(params: MergeParams<T>) -> ActorResult;
     /// Merges the output state of an execution to the actor and unlocks the state
     /// involved in the execution.
-    fn unlock(params: UnlockParams) -> anyhow::Result<Option<RawBytes>>;
+    fn unlock(params: UnlockParams) -> ActorResult;
     /// Aborts the execution and unlocks the locked state.
-    fn abort(params: LockParams) -> anyhow::Result<Option<RawBytes>>;
+    fn abort(params: LockParams) -> ActorResult;
     /// Returns the lockable state of the actor.
     fn state(params: LockParams) -> S;
 }
