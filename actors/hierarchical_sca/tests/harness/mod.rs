@@ -649,8 +649,8 @@ impl Harness {
 
         let st: State = rt.get_state();
         let exec = st.get_atomic_exec(rt.store(), &ret.cid.into()).unwrap().unwrap();
-        assert_eq!(exec.params, params);
-        assert_eq!(exec.status, ExecStatus::Initialized);
+        assert_eq!(exec.params(), &params);
+        assert_eq!(exec.status(), ExecStatus::Initialized);
         assert_eq!(ret, result);
 
         Ok(())
@@ -660,7 +660,8 @@ impl Harness {
         &self,
         rt: &mut MockRuntime,
         caller: &Address,
-        params: SubmitExecParams,
+        exec_params: AtomicExecParams,
+        submit_params: SubmitExecParams,
         result: SubmitOutput,
         len_submitted: usize,
         code: ExitCode,
@@ -673,7 +674,7 @@ impl Harness {
                 code,
                 rt.call::<SCAActor>(
                     Method::SubmitAtomicExec as MethodNum,
-                    &RawBytes::serialize(params).unwrap(),
+                    &RawBytes::serialize(submit_params).unwrap(),
                 ),
             );
             rt.verify();
@@ -683,34 +684,39 @@ impl Harness {
         let ret = rt
             .call::<SCAActor>(
                 Method::SubmitAtomicExec as MethodNum,
-                &RawBytes::serialize(params.clone()).unwrap(),
+                &RawBytes::serialize(submit_params.clone()).unwrap(),
             )
             .unwrap();
         rt.verify();
         let ret: SubmitOutput = RawBytes::deserialize(&ret).unwrap();
 
         let st: State = rt.get_state();
-        let exec = st.get_atomic_exec(rt.store(), &params.cid.into()).unwrap().unwrap();
-        assert_eq!(exec.status, result.status);
-        assert_eq!(exec.submitted.len(), len_submitted);
-        assert_eq!(ret, result);
 
-        if exec.status != ExecStatus::Initialized {
-            for (k, _) in exec.params.inputs.iter() {
+        if result.status != ExecStatus::Initialized {
+            // Check that the execution has been cleaned after it's finalized
+            if st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().is_some() {
+                panic!("execution should have been cleaned when finalized");
+            }
+            for (k, _) in exec_params.inputs.iter() {
                 let sn = Address::from_str(k).unwrap().subnet().unwrap();
                 let sub = st.get_subnet(rt.store(), &sn).unwrap().unwrap();
                 let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
                 let msg = get_topdown_msg(&crossmsgs, 0).unwrap().unwrap();
-                match exec.status {
+                match result.status {
                     ExecStatus::Aborted => assert_eq!(msg.method, METHOD_ABORT),
                     ExecStatus::Success => {
                         assert_eq!(msg.method, METHOD_UNLOCK);
                         let uparams = UnlockParams::from_raw_bytes(msg.params.borrow()).unwrap();
-                        assert_eq!(uparams.state, params.output);
+                        assert_eq!(uparams.state, submit_params.output);
                     }
                     _ => panic!("wrong method in cross-net message propagating atomic exec result"),
                 }
             }
+        } else {
+            let exec = st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().unwrap();
+            assert_eq!(exec.status(), result.status);
+            assert_eq!(exec.submitted().len(), len_submitted);
+            assert_eq!(ret, result);
         }
 
         Ok(())

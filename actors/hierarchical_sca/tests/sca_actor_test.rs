@@ -668,11 +668,12 @@ fn test_atomic_exec() {
     // caller submits output
     // FIXME: Use a proper serialized state from a sample LockableState?
     let output = SerializedState::new(b"testOutput".to_vec());
-    let params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
     h.submit_atomic_exec(
         &mut rt,
         &caller,
         params.clone(),
+        submit_params.clone(),
         SubmitOutput { status: ExecStatus::Initialized },
         1,
         ExitCode::OK,
@@ -685,6 +686,7 @@ fn test_atomic_exec() {
         &mut rt,
         &caller,
         params.clone(),
+        submit_params.clone(),
         SubmitOutput { status: ExecStatus::Initialized },
         1,
         ExitCode::USR_ILLEGAL_ARGUMENT,
@@ -695,6 +697,7 @@ fn test_atomic_exec() {
         &mut rt,
         &stranger,
         params.clone(),
+        submit_params.clone(),
         SubmitOutput { status: ExecStatus::Initialized },
         1,
         ExitCode::USR_ILLEGAL_ARGUMENT,
@@ -707,6 +710,7 @@ fn test_atomic_exec() {
     h.submit_atomic_exec(
         &mut rt,
         &caller,
+        params.clone(),
         wrong_params,
         SubmitOutput { status: ExecStatus::Initialized },
         1,
@@ -714,23 +718,26 @@ fn test_atomic_exec() {
     )
     .unwrap();
 
-    // execution succeeds and no new submission accepted.
+    // execution succeeds and no new submission accepted
     h.submit_atomic_exec(
         &mut rt,
         &other,
         params.clone(),
+        submit_params.clone(),
         SubmitOutput { status: ExecStatus::Success },
         2,
         ExitCode::OK,
     )
     .unwrap();
+    // as it succeeded the execution no longer exists
     h.submit_atomic_exec(
         &mut rt,
         &other,
-        params,
+        params.clone(),
+        submit_params,
         SubmitOutput { status: ExecStatus::Success },
         2,
-        ExitCode::USR_ILLEGAL_STATE,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
     )
     .unwrap();
 
@@ -784,23 +791,25 @@ fn test_abort_exec() {
     )
     .unwrap();
     let output = SerializedState::new(b"testOutput".to_vec());
-    let params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
     h.submit_atomic_exec(
         &mut rt,
         &caller,
         params.clone(),
+        submit_params.clone(),
         SubmitOutput { status: ExecStatus::Initialized },
         1,
         ExitCode::OK,
     )
     .unwrap();
 
-    // execution aborted and no new submission accepted.
+    // execution aborted and no new submission accepted
     let abort_params =
         SubmitExecParams { cid: exec_cid, abort: true, output: SerializedState::default() };
     h.submit_atomic_exec(
         &mut rt,
         &other,
+        params.clone(),
         abort_params,
         SubmitOutput { status: ExecStatus::Aborted },
         1,
@@ -808,15 +817,17 @@ fn test_abort_exec() {
     )
     .unwrap();
 
+    // it no longer exists
     let output = SerializedState::new(b"testOutput".to_vec());
-    let params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
     h.submit_atomic_exec(
         &mut rt,
         &caller,
         params.clone(),
+        submit_params,
         SubmitOutput { status: ExecStatus::Aborted },
         1,
-        ExitCode::USR_ILLEGAL_STATE,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
     )
     .unwrap();
 }

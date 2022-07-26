@@ -35,6 +35,19 @@ pub struct StorableMsg {
 }
 impl Cbor for StorableMsg {}
 
+impl Default for StorableMsg {
+    fn default() -> Self {
+        Self {
+            from: Address::new_id(0),
+            to: Address::new_id(0),
+            method: 0,
+            params: RawBytes::default(),
+            value: TokenAmount::from(0),
+            nonce: 0,
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum HCMsgType {
     Unknown = 0,
@@ -73,7 +86,8 @@ impl StorableMsg {
             sig_addr,
         )?;
         let to = Address::new_hierarchical(sub_id, sig_addr)?;
-        Ok(Self { from, to, method: METHOD_SEND, params: RawBytes::default(), value, nonce: 0 })
+        // the nonce and the rest of message fields are set when the message is committed.
+        Ok(Self { from, to, method: METHOD_SEND, value, ..Default::default() })
     }
 
     pub fn hc_type(&self) -> anyhow::Result<HCMsgType> {

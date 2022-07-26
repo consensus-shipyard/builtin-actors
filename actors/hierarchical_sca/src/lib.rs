@@ -756,20 +756,20 @@ impl Actor {
                 None => {
                     return Err(actor_error!(
                         illegal_argument,
-                        format!("execution with cid {} doesn't exist", &cid)
+                        format!("execution with cid {} no longer exist", &cid)
                     ));
                 }
                 Some(mut exec) => {
                     // check if the output is aborted or already succeeded
-                    if exec.status != ExecStatus::Initialized {
+                    if exec.status() != ExecStatus::Initialized {
                         return Err(actor_error!(
                             illegal_state,
-                            format!("execution with cid {} doesn't exist", &cid)
+                            format!("execution with cid {} no longer exist", &cid)
                         ));
                     }
 
                     // check if the user is involved in the execution
-                    if !is_addr_in_exec(&caller, &exec.params.inputs).map_err(|e| {
+                    if !is_addr_in_exec(&caller, &exec.params().inputs).map_err(|e| {
                         e.downcast_default(
                             ExitCode::USR_ILLEGAL_ARGUMENT,
                             "error checking if address is involved in the execution",
@@ -784,7 +784,7 @@ impl Actor {
                     // check if the address already submitted an output
                     // FIXME: At this point we don't support the atomic execution between
                     // the same address in different subnets. This can be easily supported if needed.
-                    match exec.submitted.get(&caller.to_string()) {
+                    match exec.submitted().get(&caller.to_string()) {
                         Some(_) => {
                             return Err(actor_error!(
                                 illegal_argument,
@@ -797,11 +797,12 @@ impl Actor {
                     // check if this is an abort
                     if params.abort {
                         // mutate status
-                        exec.status = ExecStatus::Aborted;
-                        out_status = exec.status;
+                        exec.set_status(ExecStatus::Aborted);
+                        out_status = exec.status();
                         //  propagate result to subnet
                         st.propagate_exec_result(
                             rt.store(),
+                            &cid.into(),
                             &exec,
                             params.output,
                             rt.curr_epoch(),
@@ -813,32 +814,26 @@ impl Actor {
                                 "error propagating execution result to subnets",
                             )
                         })?;
-                        // persist the execution
-                        st.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
-                            e.downcast_default(
-                                ExitCode::USR_ILLEGAL_STATE,
-                                "error putting aborted atomic execution in registry",
-                            )
-                        })?;
                         return Ok(());
                     }
 
                     // if not aborting
                     let output_cid = params.output.cid();
                     // check if all the submitted are equal to current cid
-                    let out_cids: Vec<Cid> = exec.submitted.values().cloned().collect();
+                    let out_cids: Vec<Cid> = exec.submitted().values().cloned().collect();
                     if !out_cids.iter().all(|&c| c == output_cid) {
                         return Err(actor_error!(
                             illegal_argument,
                             format!("cid provided not equal to the ones submitted: {}", &cid)
                         ));
                     }
-                    exec.submitted.insert(caller.to_string(), output_cid);
+                    exec.submitted_mut().insert(caller.to_string(), output_cid);
                     // if all submissions collected
-                    if exec.submitted.len() == exec.params.inputs.len() {
-                        exec.status = ExecStatus::Success;
+                    if exec.submitted().len() == exec.params().inputs.len() {
+                        exec.set_status(ExecStatus::Success);
                         st.propagate_exec_result(
                             rt.store(),
+                            &cid.into(),
                             &exec,
                             params.output,
                             rt.curr_epoch(),
@@ -850,8 +845,10 @@ impl Actor {
                                 "error propagating execution result to subnets",
                             )
                         })?;
+                        out_status = exec.status();
+                        return Ok(());
                     }
-                    out_status = exec.status;
+                    out_status = exec.status();
                     // persist the execution
                     st.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
                         e.downcast_default(
@@ -859,15 +856,9 @@ impl Actor {
                             "error putting aborted atomic execution in registry",
                         )
                     })?;
-
-                    // TODO: Clean the execution once is done? Then we need
-                    // to traverse several epochs if we want to have a commands
-                    // that prompts the user with the state of all the execution
-                    // (after succeeding or aborting). If we don't do this we need
-                    // a way to de-duplicate executions, because a user may abort an
-                    // execution and look to make it again (use the epoch?).
                 }
             };
+
             Ok(())
         })?;
 
