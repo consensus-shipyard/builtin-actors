@@ -528,7 +528,7 @@ impl State {
         store: &BS,
         cid: &TCid<TLink<AtomicExecParamsMeta>>,
         exec: &AtomicExec,
-        output: atomic::SerializedState, /* FIXME: LockedState to propagate. The same as in SubmitAtomicExecParams*/
+        output: atomic::SerializedState, // LockableState to propagate. The same as in SubmitAtomicExecParams
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {

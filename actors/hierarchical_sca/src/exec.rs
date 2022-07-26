@@ -171,15 +171,15 @@ impl AtomicExecParams {
             msgs_array.batch_set(self.msgs.clone()).map_err(|e| e.into())
         })?;
 
-        for (k, v) in self.inputs.iter() {
-            meta.inputs_cid.update(&store, |input_map| {
+        meta.inputs_cid.update(&store, |input_map| {
+            for (k, v) in self.inputs.iter() {
                 let addr = Address::from_str(k)?;
                 input_map.set(addr.to_bytes().into(), v.clone()).map_err(|e| {
                     e.downcast_wrap(format!("failed to set input map to compute exec cid"))
                 })?;
-                Ok(())
-            })?;
-        }
+            }
+            Ok(())
+        })?;
 
         let meta_cid: TCid<TLink<AtomicExecParamsMeta>> = TCid::new_link(&store, &meta)?;
 
