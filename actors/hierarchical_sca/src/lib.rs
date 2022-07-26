@@ -1,6 +1,6 @@
 use cid::Cid;
 use exec::{
-    is_addr_in_exec, is_common_parent, AtomicExec, AtomicExecParams, ExecStatus, LockedOutput,
+    is_addr_in_exec, is_common_parent, AtomicExec, AtomicExecParamsRaw, ExecStatus, LockedOutput,
     SubmitExecParams, SubmitOutput,
 };
 use fil_actors_runtime::runtime::{ActorCode, Runtime};
@@ -38,6 +38,7 @@ pub mod exec;
 pub mod ext;
 mod state;
 pub mod subnet;
+pub mod taddress;
 pub mod tcid;
 mod types;
 
@@ -641,7 +642,7 @@ impl Actor {
     /// and that its semantics and inputs are correct.
     fn init_atomic_exec<BS, RT>(
         rt: &mut RT,
-        params: AtomicExecParams,
+        params: AtomicExecParamsRaw,
     ) -> Result<LockedOutput, ActorError>
     where
         BS: Blockstore,
@@ -650,8 +651,7 @@ impl Actor {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
 
         // translate inputs into id addresses for the subnet.
-        let mut params = params;
-        params.input_into_ids(rt).map_err(|e| {
+        let params = params.input_into_ids(rt).map_err(|e| {
             e.downcast_default(
                 ExitCode::USR_ILLEGAL_ARGUMENT,
                 "error translating execution input addresses to IDs",

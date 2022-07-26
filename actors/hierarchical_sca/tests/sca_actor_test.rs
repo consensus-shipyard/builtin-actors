@@ -1,6 +1,8 @@
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
+use fil_actor_hierarchical_sca::taddress::Hierarchical;
+use fil_actor_hierarchical_sca::taddress::TAddress;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
 use fvm_ipld_encoding::RawBytes;
@@ -12,6 +14,7 @@ use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::str::FromStr;
 
 use fil_actor_hierarchical_sca::atomic::SerializedState;
@@ -852,15 +855,15 @@ fn gen_locked_state(
     sn2: &SubnetID,
     caller: &Address,
     other: &Address,
-) -> HashMap<String, LockedStateInfo> {
+) -> HashMap<TAddress<Hierarchical>, LockedStateInfo> {
     let lock_cid1 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test1"));
     let lock_cid2 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test2"));
-    let addr1 = Address::new_hierarchical(sn1, caller).unwrap();
-    let addr2 = Address::new_hierarchical(sn2, other).unwrap();
+    let addr1 = Address::new_hierarchical(sn1, caller).unwrap().try_into().unwrap();
+    let addr2 = Address::new_hierarchical(sn2, other).unwrap().try_into().unwrap();
     let act1 = Address::new_id(900);
     let act2 = Address::new_id(901);
-    let mut m = HashMap::<String, LockedStateInfo>::new();
-    m.insert(addr1.to_string(), LockedStateInfo { cid: lock_cid1, actor: act1 });
-    m.insert(addr2.to_string(), LockedStateInfo { cid: lock_cid2, actor: act2 });
+    let mut m = HashMap::new();
+    m.insert(addr1, LockedStateInfo { cid: lock_cid1, actor: act1 });
+    m.insert(addr2, LockedStateInfo { cid: lock_cid2, actor: act2 });
     m
 }

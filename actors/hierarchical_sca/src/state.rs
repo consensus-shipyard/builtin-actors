@@ -517,11 +517,10 @@ impl State {
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
-        let ks: Vec<String> = exec.params.inputs.clone().into_keys().collect();
+        let ks: Vec<_> = exec.params.inputs.clone().into_keys().collect();
         let mut visited = HashMap::<SubnetID, bool>::new();
         for k in ks.iter() {
-            let addr = Address::from_str(k.as_str())?;
-            let sn = addr.subnet()?;
+            let sn = k.subnet();
             match visited.get(&sn) {
                 Some(_) => {
                     continue;

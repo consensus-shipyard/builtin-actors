@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::str::FromStr;
 
 use anyhow::anyhow;
 use cid::multihash::Code;
@@ -697,7 +696,7 @@ impl Harness {
 
         if exec.status != ExecStatus::Initialized {
             for (k, _) in exec.params.inputs.iter() {
-                let sn = Address::from_str(k).unwrap().subnet().unwrap();
+                let sn = k.subnet();
                 let sub = st.get_subnet(rt.store(), &sn).unwrap().unwrap();
                 let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
                 let msg = get_topdown_msg(&crossmsgs, 0).unwrap().unwrap();
