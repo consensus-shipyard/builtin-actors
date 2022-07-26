@@ -233,8 +233,12 @@ pub fn is_addr_in_exec(
     for k in ks.iter() {
         let addr = k.raw_addr();
 
+        // XXX: Throwing away the typing information so we can compare with `caller`.
+        // Ideally we should receive a `TAddress<ID>` so we know these are okay to compare.
+        let addr = addr.addr();
+
         // if the raw address is equal to caller
-        if caller == &addr {
+        if caller == addr {
             return Ok(true);
         }
     }

@@ -11,6 +11,17 @@ pub struct TAddress<T> {
     _phantom: PhantomData<T>,
 }
 
+impl<T> TAddress<T> {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.addr.to_bytes()
+    }
+
+    /// The untyped `Address` representation.
+    pub fn addr(&self) -> &Address {
+        &self.addr
+    }
+}
+
 trait RawAddress {
     fn is_compatible(addr: Address) -> bool;
 }
@@ -86,8 +97,8 @@ impl<A> TAddress<Hierarchical<A>> {
         self.addr.subnet().unwrap()
     }
 
-    pub fn raw_addr(&self) -> Address {
-        self.addr.raw_addr().unwrap()
+    pub fn raw_addr(&self) -> TAddress<A> {
+        TAddress { addr: self.addr.raw_addr().unwrap(), _phantom: PhantomData }
     }
 }
 
@@ -124,10 +135,4 @@ where
     Self: TryFrom<Address>,
     <Self as TryFrom<Address>>::Error: Display,
 {
-}
-
-impl<T> TAddress<T> {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.addr.to_bytes()
-    }
 }
