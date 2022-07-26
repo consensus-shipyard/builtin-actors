@@ -532,32 +532,17 @@ impl State {
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
-        let ks: Vec<String> = exec.params().inputs.clone().into_keys().collect();
         let mut visited = HashMap::<SubnetID, bool>::new();
-        for k in ks.iter() {
+        let params = exec.params();
+        for (k, v) in params.inputs.iter() {
             let addr = Address::from_str(k.as_str())?;
             let sn = addr.subnet()?;
-            match visited.get(&sn) {
-                Some(_) => {
-                    continue;
-                }
-                None => {
-                    let p = exec.params();
-                    // send cross-message
-                    let input = match p.inputs.get(k) {
-                        Some(i) => i,
-                        None => {
-                            return Err(anyhow!(
-                                "input for subnet not found. unable to propagate the output message"
-                            ))
-                        }
-                    };
-                    let mut msg =
-                        self.exec_result_msg(&sn, &input.actor, &p.msgs[0], output.clone(), abort)?;
-                    self.send_cross(store, &mut msg, curr_epoch)?;
-                    // mark as sent
-                    visited.insert(sn, true);
-                }
+            if visited.get(&sn).is_none() {
+                let mut msg =
+                    self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;
+                self.send_cross(store, &mut msg, curr_epoch)?;
+                // mark as sent
+                visited.insert(sn, true);
             }
         }
 
