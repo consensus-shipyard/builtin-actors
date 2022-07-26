@@ -1,8 +1,7 @@
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::taddress::Hierarchical;
-use fil_actor_hierarchical_sca::taddress::TAddress;
+use fil_actor_hierarchical_sca::exec::HierarchicalId;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
 use fvm_ipld_encoding::RawBytes;
@@ -866,7 +865,7 @@ fn gen_locked_state(
     sn2: &SubnetID,
     caller: &Address,
     other: &Address,
-) -> HashMap<TAddress<Hierarchical>, LockedStateInfo> {
+) -> HashMap<HierarchicalId, LockedStateInfo> {
     let lock_cid1 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test1"));
     let lock_cid2 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test2"));
     let addr1 = Address::new_hierarchical(sn1, caller).unwrap().try_into().unwrap();

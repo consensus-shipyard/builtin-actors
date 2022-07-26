@@ -3,7 +3,7 @@ use std::{convert::TryFrom, fmt::Display, marker::PhantomData};
 use serde::de::Error;
 
 use fvm_ipld_encoding::Cbor;
-use fvm_shared::address::{Address, SubnetID};
+use fvm_shared::address::{Address, Payload, SubnetID};
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TAddress<T> {
@@ -11,27 +11,55 @@ pub struct TAddress<T> {
     _phantom: PhantomData<T>,
 }
 
+trait RawAddress {
+    fn is_compatible(addr: Address) -> bool;
+}
+
 /// Define a unit struct for address types that can be used as a generic parameter.
-macro_rules! address_types {
+macro_rules! raw_address_types {
     ($($typ:ident),+) => {
         $(
         #[derive(PartialEq, Eq, Hash, Clone, Debug)]
         pub struct $typ;
+
+        impl RawAddress for $typ {
+          fn is_compatible(addr: Address) -> bool {
+            match addr.payload() {
+              Payload::$typ(_) => true,
+              _ => false
+            }
+          }
+        }
         )*
     };
 }
 
 // Based on `Payload` variants.
-address_types! {
+raw_address_types! {
   ID,
   Secp256k1,
   Actor,
-  BLS,
-  Hierarchical
+  BLS
 }
 
-// NOTE: `Hierarchical` could also be generic in what it wraps,
-// which could be `Any`, `ID, ``Secp256k1`, `BLS` but *not* another `Hierarchical`.
+/// For `Hierarchical` address type that doesn't say what kind it wraps.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct AnyRawAddr;
+
+impl RawAddress for AnyRawAddr {
+    fn is_compatible(addr: Address) -> bool {
+        match addr.payload() {
+            Payload::Hierarchical(_) => false,
+            _ => true,
+        }
+    }
+}
+
+/// A `Hierarchical` is generic in what it wraps, which could be any raw address type, but *not* another `Hierarchical`.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct Hierarchical<A> {
+    _phantom: PhantomData<A>,
+}
 
 impl<T> Into<Address> for TAddress<T> {
     fn into(self) -> Address {
@@ -39,18 +67,21 @@ impl<T> Into<Address> for TAddress<T> {
     }
 }
 
-impl TryFrom<Address> for TAddress<Hierarchical> {
+impl<A: RawAddress> TryFrom<Address> for TAddress<Hierarchical<A>> {
     type Error = fvm_shared::address::Error;
 
     fn try_from(value: Address) -> Result<Self, Self::Error> {
         let sub = value.subnet()?;
         let raw = value.raw_addr()?;
+        if !A::is_compatible(raw) {
+            return Err(fvm_shared::address::Error::InvalidPayload);
+        }
         let addr = Address::new_hierarchical(&sub, &raw)?;
         Ok(Self { addr, _phantom: PhantomData })
     }
 }
 
-impl TAddress<Hierarchical> {
+impl<A> TAddress<Hierarchical<A>> {
     pub fn subnet(&self) -> SubnetID {
         self.addr.subnet().unwrap()
     }

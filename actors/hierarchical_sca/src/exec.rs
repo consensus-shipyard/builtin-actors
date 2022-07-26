@@ -8,7 +8,7 @@ use fvm_shared::address::{Address, SubnetID};
 use std::convert::TryFrom;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::taddress::{Hierarchical, TAddress};
+use crate::taddress::{Hierarchical, TAddress, ID};
 use crate::tcid::{TAmt, TCid, THamt, TLink};
 use crate::{atomic, StorableMsg};
 
@@ -44,6 +44,9 @@ impl Cbor for AtomicExec {}
 /// in order to be able to use addresses as keys of a hashmap
 /// we use their string format (thus this type).
 type StringifiedAddr = String;
+
+/// A hierarchical address resolved to an ID.
+pub type HierarchicalId = TAddress<Hierarchical<ID>>;
 
 impl AtomicExec {
     pub fn new(params: AtomicExecParams) -> Self {
@@ -100,7 +103,7 @@ impl Cbor for AtomicExecParamsRaw {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExecParams {
     pub msgs: Vec<StorableMsg>,
-    pub inputs: HashMap<TAddress<Hierarchical>, LockedStateInfo>,
+    pub inputs: HashMap<HierarchicalId, LockedStateInfo>,
 }
 
 /// Output of the initialization of an atomic execution.
@@ -164,7 +167,7 @@ impl AtomicExecParamsRaw {
             };
             // Update with id_addr and subnet
             let sn_addr = Address::new_hierarchical(&sn, &id_addr)?;
-            let addr = TAddress::<Hierarchical>::try_from(sn_addr)?;
+            let addr = TAddress::try_from(sn_addr)?;
             out.insert(addr, val);
         }
         Ok(AtomicExecParams { msgs: self.msgs, inputs: out })
@@ -200,7 +203,7 @@ impl AtomicExecParams {
 /// Computes the common parent for the inputs of the atomic execution.
 pub fn is_common_parent(
     curr: &SubnetID,
-    inputs: &HashMap<TAddress<Hierarchical>, LockedStateInfo>,
+    inputs: &HashMap<HierarchicalId, LockedStateInfo>,
 ) -> anyhow::Result<bool> {
     if inputs.len() == 0 {
         return Err(anyhow!("wrong length! no inputs in hashmap"));
@@ -223,7 +226,7 @@ pub fn is_common_parent(
 /// Check if the address is involved in the execution
 pub fn is_addr_in_exec(
     caller: &Address,
-    inputs: &HashMap<TAddress<Hierarchical>, LockedStateInfo>,
+    inputs: &HashMap<HierarchicalId, LockedStateInfo>,
 ) -> anyhow::Result<bool> {
     let ks: Vec<_> = inputs.clone().into_keys().collect();
 
