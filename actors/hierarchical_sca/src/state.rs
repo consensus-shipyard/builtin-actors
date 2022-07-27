@@ -15,7 +15,7 @@ use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
 use lazy_static::lazy_static;
 use num_traits::Zero;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::atomic;
@@ -532,7 +532,7 @@ impl State {
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
-        let mut visited = HashMap::<SubnetID, bool>::new();
+        let mut visited = HashSet::new();
         let params = exec.params();
         for (k, v) in params.inputs.iter() {
             let addr = Address::from_str(k.as_str())?;
@@ -542,7 +542,7 @@ impl State {
                     self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;
                 self.send_cross(store, &mut msg, curr_epoch)?;
                 // mark as sent
-                visited.insert(sn, true);
+                visited.insert(sn);
             }
         }
 
