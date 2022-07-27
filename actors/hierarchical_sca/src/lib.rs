@@ -649,6 +649,12 @@ impl Actor {
     {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
 
+
+        // get cid for atomic execution
+        let cid = params.cid().map_err(|e| {
+            e.downcast_default(ExitCode::USR_ILLEGAL_ARGUMENT, "error computing Cid for params")
+        })?;
+
         // translate inputs into id addresses for the subnet.
         let mut params = params;
         params.input_into_ids(rt).map_err(|e| {
@@ -656,11 +662,6 @@ impl Actor {
                 ExitCode::USR_ILLEGAL_ARGUMENT,
                 "error translating execution input addresses to IDs",
             )
-        })?;
-
-        // get cid for atomic execution
-        let cid = params.cid().map_err(|e| {
-            e.downcast_default(ExitCode::USR_ILLEGAL_ARGUMENT, "error computing Cid for params")
         })?;
 
         rt.transaction(|st: &mut State, rt| {
