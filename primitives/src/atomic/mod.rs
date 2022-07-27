@@ -36,6 +36,10 @@ pub trait MergeableState<S: Serialize + DeserializeOwned> {
     fn merge_output(&mut self, other: Self) -> anyhow::Result<()>;
 }
 
+/// Internal map kept by actor supporting atomic executions to track
+/// the states that have been locked and are used in an atomic exec.
+pub type LockedMap<T> = TCid<THamt<Cid, LockableState<T>>>;
+
 /// Trait that specifies the interface of an actor state able to support
 /// atomic executions.
 pub trait LockableActorState<T>
@@ -44,7 +48,7 @@ where
 {
     /// Map with all the locked state in the actor uniquely identified through
     /// their Cid.
-    fn locked_map_cid(&self) -> TCid<THamt<Cid, LockableState<T>>>;
+    fn locked_map_cid(&self) -> LockedMap<T>;
     /// Returns the output state of an execution from the current state
     /// of the actor according to the input parameters.
     fn output(&self, params: LockParams) -> LockableState<T>;
