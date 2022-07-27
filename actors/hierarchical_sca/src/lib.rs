@@ -747,10 +747,9 @@ impl Actor {
             actor_error!(illegal_argument, "error translating caller address to ID")
         })?;
 
-        let mut out_status = ExecStatus::Initialized;
-
-        rt.transaction(|st: &mut State, rt| {
+        let status = rt.transaction(|st: &mut State, rt| {
             let cid = params.cid;
+
             match st.get_atomic_exec(rt.store(), &cid.into()).map_err(|e| {
                 e.downcast_default(
                     ExitCode::USR_ILLEGAL_ARGUMENT,
@@ -802,7 +801,6 @@ impl Actor {
                     if params.abort {
                         // mutate status
                         exec.set_status(ExecStatus::Aborted);
-                        out_status = exec.status();
                         //  propagate result to subnet
                         st.propagate_exec_result(
                             rt.store(),
@@ -818,7 +816,7 @@ impl Actor {
                                 "error propagating execution result to subnets",
                             )
                         })?;
-                        return Ok(());
+                        return Ok(exec.status());
                     }
 
                     // if not aborting
@@ -849,25 +847,23 @@ impl Actor {
                                 "error propagating execution result to subnets",
                             )
                         })?;
-                        out_status = exec.status();
-                        return Ok(());
+                        return Ok(exec.status());
                     }
-                    out_status = exec.status();
                     // persist the execution
+                    let status = exec.status();
                     st.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
                         e.downcast_default(
                             ExitCode::USR_ILLEGAL_STATE,
                             "error putting aborted atomic execution in registry",
                         )
                     })?;
+                    Ok(status)
                 }
-            };
-
-            Ok(())
+            }
         })?;
 
         // return cid for the execution
-        Ok(SubmitOutput { status: out_status })
+        Ok(SubmitOutput { status })
     }
 }
 
