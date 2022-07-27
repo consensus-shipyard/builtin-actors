@@ -202,6 +202,8 @@ pub fn check_state_invariants<'a, BS: Blockstore + Debug>(
                 acc.with_prefix("verifreg: ").add_all(&msgs);
                 verifreg_summary = Some(summary);
             }
+            Some(Type::SCA) => todo!(),
+            Some(Type::Subnet) => todo!(),
             None => {
                 bail!("unexpected actor code CID {} for address {}", actor.code, key);
             }

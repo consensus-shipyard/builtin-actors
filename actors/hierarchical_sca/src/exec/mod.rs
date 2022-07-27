@@ -5,10 +5,12 @@ use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
 use fvm_ipld_encoding::repr::*;
 use fvm_ipld_encoding::{tuple::*, Cbor};
 use fvm_shared::address::{Address, SubnetID};
+use std::convert::TryFrom;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::tcid::{TAmt, TCid, THamt, TLink};
 use crate::{atomic, StorableMsg};
+use actor_primitives::taddress::{Hierarchical, TAddress, TAddressKey, ID};
+use actor_primitives::tcid::{TAmt, TCid, THamt, TLink};
 
 /// Status of an atomic execution
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
@@ -42,6 +44,9 @@ impl Cbor for AtomicExec {}
 /// in order to be able to use addresses as keys of a hashmap
 /// we use their string format (thus this type).
 type StringifiedAddr = String;
+
+/// A hierarchical address resolved to an ID.
+pub type HierarchicalId = TAddressKey<Hierarchical<ID>>;
 
 impl AtomicExec {
     pub fn new(params: AtomicExecParams) -> Self {
@@ -84,15 +89,22 @@ pub struct SubmitExecParams {
 }
 impl Cbor for SubmitExecParams {}
 
+/// Parameters to uniquely initiate an atomic execution.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+pub struct AtomicExecParamsRaw {
+    pub msgs: Vec<StorableMsg>,
+    pub inputs: HashMap<StringifiedAddr, LockedStateInfo>,
+}
+impl Cbor for AtomicExecParamsRaw {}
+
 /// Parameters to uniquely identify and describe an atomic execution.
 ///
 /// The unique ID of an execution is determined by the CID of its parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct AtomicExecParams {
     pub msgs: Vec<StorableMsg>,
-    pub inputs: HashMap<StringifiedAddr, LockedStateInfo>,
+    pub inputs: HashMap<HierarchicalId, LockedStateInfo>,
 }
-impl Cbor for AtomicExecParams {}
 
 /// Output of the initialization of an atomic execution.
 // FIXME: Can we probably return the CID directly without
@@ -134,18 +146,18 @@ impl AtomicExecParamsMeta {
     }
 }
 
-impl AtomicExecParams {
+impl AtomicExecParamsRaw {
     /// translate input addresses into ID address in the current subnet.
     /// The parameters of the atomic execution include non-ID addresses (i.e. keys)
     /// and they need to be translated to their corresponding ID addresses in the
     /// current subnet.
-    pub fn input_into_ids<BS, RT>(&mut self, rt: &mut RT) -> anyhow::Result<()>
+    pub fn input_into_ids<BS, RT>(self, rt: &mut RT) -> anyhow::Result<AtomicExecParams>
     where
         BS: Blockstore,
         RT: Runtime<BS>,
     {
-        let mut out = HashMap::<StringifiedAddr, LockedStateInfo>::new();
-        for (key, val) in self.inputs.iter() {
+        let mut out = HashMap::new();
+        for (key, val) in self.inputs.into_iter() {
             let addr = Address::from_str(&key)?;
             let sn = addr.subnet()?;
             let addr = addr.raw_addr()?;
@@ -155,12 +167,11 @@ impl AtomicExecParams {
             };
             // Update with id_addr and subnet
             let sn_addr = Address::new_hierarchical(&sn, &id_addr)?;
-            out.insert(sn_addr.to_string(), (*val).clone());
+            let addr = TAddressKey(TAddress::try_from(sn_addr)?);
+            out.insert(addr, val);
         }
-        self.inputs = out;
-        Ok(())
+        Ok(AtomicExecParams { msgs: self.msgs, inputs: out })
     }
-
     /// Computes the CID for the atomic execution parameters. The input parameters
     /// for the execution determines the CID used to uniquely identify the execution.
     pub fn cid(&self) -> anyhow::Result<Cid> {
@@ -190,19 +201,17 @@ impl AtomicExecParams {
 /// Computes the common parent for the inputs of the atomic execution.
 pub fn is_common_parent(
     curr: &SubnetID,
-    inputs: &HashMap<StringifiedAddr, LockedStateInfo>,
+    inputs: &HashMap<HierarchicalId, LockedStateInfo>,
 ) -> anyhow::Result<bool> {
     if inputs.len() == 0 {
         return Err(anyhow!("wrong length! no inputs in hashmap"));
     }
 
-    let ks: Vec<&String> = inputs.keys().collect();
-    let addr = Address::from_str(ks[0].as_str())?;
-    let mut cp = addr.subnet()?;
+    let ks: Vec<_> = inputs.keys().collect();
+    let mut cp = ks[0].0.subnet();
 
     for k in ks.iter() {
-        let addr = Address::from_str(k.as_str())?;
-        let sn = addr.subnet()?;
+        let sn = k.0.subnet();
         cp = match cp.common_parent(&sn) {
             Some((_, s)) => s,
             None => continue,
@@ -214,14 +223,13 @@ pub fn is_common_parent(
 
 /// Check if the address is involved in the execution
 pub fn is_addr_in_exec(
-    caller: &Address,
-    inputs: &HashMap<StringifiedAddr, LockedStateInfo>,
+    caller: &TAddress<ID>,
+    inputs: &HashMap<HierarchicalId, LockedStateInfo>,
 ) -> anyhow::Result<bool> {
-    let ks: Vec<&String> = inputs.keys().collect();
+    let ks: Vec<_> = inputs.clone().into_keys().collect();
 
     for k in ks.iter() {
-        let addr = Address::from_str(k.as_str())?;
-        let addr = addr.raw_addr()?;
+        let addr = k.0.raw_addr();
 
         // if the raw address is equal to caller
         if caller == &addr {
