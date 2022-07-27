@@ -647,7 +647,8 @@ impl Harness {
 
         let st: State = rt.get_state();
         let exec = st.get_atomic_exec(rt.store(), &ret.cid.into()).unwrap().unwrap();
-        assert_eq!(exec.params(), &params.input_into_ids(rt).unwrap());
+        let params = rt.call_fn(|rt| params.input_into_ids(rt)).unwrap();
+        assert_eq!(exec.params(), &params);
         assert_eq!(exec.status(), ExecStatus::Initialized);
         assert_eq!(ret, result);
 

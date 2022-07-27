@@ -535,7 +535,7 @@ impl State {
         let mut visited = HashSet::new();
         let params = exec.params();
         for (k, v) in params.inputs.iter() {
-            let sn = k.subnet();
+            let sn = k.0.subnet();
             if visited.get(&sn).is_none() {
                 let mut msg =
                     self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;

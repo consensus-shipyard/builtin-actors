@@ -9,7 +9,7 @@ use std::convert::TryFrom;
 use std::{collections::HashMap, str::FromStr};
 
 use crate::{atomic, StorableMsg};
-use actor_primitives::taddress::{Hierarchical, TAddress, ID};
+use actor_primitives::taddress::{Hierarchical, TAddress, TAddressKey, ID};
 use actor_primitives::tcid::{TAmt, TCid, THamt, TLink};
 
 /// Status of an atomic execution
@@ -46,7 +46,7 @@ impl Cbor for AtomicExec {}
 type StringifiedAddr = String;
 
 /// A hierarchical address resolved to an ID.
-pub type HierarchicalId = TAddress<Hierarchical<ID>>;
+pub type HierarchicalId = TAddressKey<Hierarchical<ID>>;
 
 impl AtomicExec {
     pub fn new(params: AtomicExecParams) -> Self {
@@ -167,7 +167,7 @@ impl AtomicExecParamsRaw {
             };
             // Update with id_addr and subnet
             let sn_addr = Address::new_hierarchical(&sn, &id_addr)?;
-            let addr = TAddress::try_from(sn_addr)?;
+            let addr = TAddressKey(TAddress::try_from(sn_addr)?);
             out.insert(addr, val);
         }
         Ok(AtomicExecParams { msgs: self.msgs, inputs: out })
@@ -182,23 +182,15 @@ impl AtomicExecParamsRaw {
             msgs_array.batch_set(self.msgs.clone()).map_err(|e| e.into())
         })?;
 
-        eprintln!("set the msgs");
-
         meta.inputs_cid.update(&store, |input_map| {
             for (k, v) in self.inputs.iter() {
-                eprintln!("parsing address {k}");
-
                 let addr = Address::from_str(k)?;
-
-                eprintln!("got address {addr}");
                 input_map.set(addr.to_bytes().into(), v.clone()).map_err(|e| {
                     e.downcast_wrap(format!("failed to set input map to compute exec cid"))
                 })?;
             }
             Ok(())
         })?;
-
-        eprintln!("set the inputs");
 
         let meta_cid: TCid<TLink<AtomicExecParamsMeta>> = TCid::new_link(&store, &meta)?;
 
@@ -216,10 +208,10 @@ pub fn is_common_parent(
     }
 
     let ks: Vec<_> = inputs.keys().collect();
-    let mut cp = ks[0].subnet();
+    let mut cp = ks[0].0.subnet();
 
     for k in ks.iter() {
-        let sn = k.subnet();
+        let sn = k.0.subnet();
         cp = match cp.common_parent(&sn) {
             Some((_, s)) => s,
             None => continue,
@@ -237,7 +229,7 @@ pub fn is_addr_in_exec(
     let ks: Vec<_> = inputs.clone().into_keys().collect();
 
     for k in ks.iter() {
-        let addr = k.raw_addr();
+        let addr = k.0.raw_addr();
 
         // XXX: Throwing away the typing information so we can compare with `caller`.
         // Ideally we should receive a `TAddress<ID>` so we know these are okay to compare.

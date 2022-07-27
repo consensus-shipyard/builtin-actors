@@ -458,6 +458,18 @@ impl MockRuntime {
         res
     }
 
+    /// Method to use when we need to call something in the test that requires interacting
+    /// with the runtime in a read-only fashion, but it's not an actor invocation.
+    pub fn call_fn<F, T>(&mut self, f: F) -> anyhow::Result<T>
+    where
+        F: FnOnce(&mut Self) -> anyhow::Result<T>,
+    {
+        self.in_call = true;
+        let res = f(self);
+        self.in_call = false;
+        res
+    }
+
     /// Verifies that all mock expectations have been met.
     pub fn verify(&mut self) {
         self.expectations.borrow_mut().verify()

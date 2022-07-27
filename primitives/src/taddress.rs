@@ -1,4 +1,4 @@
-use std::{convert::TryFrom, fmt::Display, marker::PhantomData};
+use std::{convert::TryFrom, fmt::Display, marker::PhantomData, str::FromStr};
 
 use serde::de::Error;
 
@@ -92,6 +92,17 @@ impl<A: RawAddress> TryFrom<Address> for TAddress<Hierarchical<A>> {
     }
 }
 
+impl<A: RawAddress> TryFrom<Address> for TAddress<A> {
+    type Error = fvm_shared::address::Error;
+
+    fn try_from(value: Address) -> Result<Self, Self::Error> {
+        if !A::is_compatible(value) {
+            return Err(fvm_shared::address::Error::InvalidPayload);
+        }
+        Ok(Self { addr: value, _phantom: PhantomData })
+    }
+}
+
 impl<A> TAddress<Hierarchical<A>> {
     pub fn subnet(&self) -> SubnetID {
         self.addr.subnet().unwrap()
@@ -134,5 +145,47 @@ impl<T> Cbor for TAddress<T>
 where
     Self: TryFrom<Address>,
     <Self as TryFrom<Address>>::Error: Display,
+{
+}
+
+/// Apparently CBOR has problems using `Address` as a key in `HashMap`.
+/// This type can be used to wrap an address and turn it into `String`
+/// for the purpose of CBOR serialization.
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
+pub struct TAddressKey<T>(pub TAddress<T>);
+
+/// Serializes to the `String` format of the underlying `Address`.
+impl<T> serde::Serialize for TAddressKey<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.addr.to_string().serialize(serializer)
+    }
+}
+
+/// Deserializes from `String` format. May be rejected if the address is not the expected type.
+impl<'d, T> serde::Deserialize<'d> for TAddressKey<T>
+where
+    TAddress<T>: TryFrom<Address>,
+    <TAddress<T> as TryFrom<Address>>::Error: Display,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'d>,
+    {
+        let str = String::deserialize(deserializer)?;
+        let raw = Address::from_str(&str)
+            .map_err(|e| D::Error::custom(format!("not an address string: {}", e)))?;
+        let addr = TAddress::<T>::try_from(raw)
+            .map_err(|e| D::Error::custom(format!("wrong address type: {}", e)))?;
+        Ok(Self(addr))
+    }
+}
+
+impl<T> Cbor for TAddressKey<T>
+where
+    TAddress<T>: TryFrom<Address>,
+    <TAddress<T> as TryFrom<Address>>::Error: Display,
 {
 }
