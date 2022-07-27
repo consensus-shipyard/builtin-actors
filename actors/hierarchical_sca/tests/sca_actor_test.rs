@@ -1,7 +1,9 @@
+use actor_primitives::atomic::SerializedState;
+use actor_primitives::tcid::TCid;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::exec::HierarchicalId;
+use fil_actor_hierarchical_sca::exec::AtomicExecParamsRaw;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
 use fvm_ipld_encoding::RawBytes;
@@ -13,14 +15,11 @@ use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::str::FromStr;
 
-use fil_actor_hierarchical_sca::atomic::SerializedState;
 use fil_actor_hierarchical_sca::exec::{
-    AtomicExecParams, ExecStatus, LockedOutput, LockedStateInfo, SubmitExecParams, SubmitOutput,
+    ExecStatus, LockedOutput, LockedStateInfo, SubmitExecParams, SubmitOutput,
 };
-use fil_actor_hierarchical_sca::tcid::TCid;
 use fil_actor_hierarchical_sca::{
     get_bottomup_msg, subnet, Actor as SCAActor, Checkpoint, State, StorableMsg,
     DEFAULT_CHECKPOINT_PERIOD,
@@ -641,7 +640,7 @@ fn test_atomic_exec() {
     h.register(&mut rt, &SUBNET_ONE, &reg_value, ExitCode::OK).unwrap();
     h.register(&mut rt, &SUBNET_TWO, &reg_value, ExitCode::OK).unwrap();
 
-    let params = AtomicExecParams {
+    let params = AtomicExecParamsRaw {
         msgs: gen_exec_msgs(other.clone()),
         inputs: gen_locked_state(&sn1, &sn2, &caller, &other),
     };
@@ -745,7 +744,7 @@ fn test_atomic_exec() {
 
     // start a new execution and see that it is correctly added.
     let stranger = Address::new_id(923);
-    let params = AtomicExecParams {
+    let params = AtomicExecParamsRaw {
         msgs: gen_exec_msgs(caller.clone()),
         inputs: gen_locked_state(&sn1, &sn2, &caller, &stranger),
     };
@@ -777,7 +776,7 @@ fn test_abort_exec() {
     h.register(&mut rt, &SUBNET_ONE, &reg_value, ExitCode::OK).unwrap();
     h.register(&mut rt, &SUBNET_TWO, &reg_value, ExitCode::OK).unwrap();
 
-    let params = AtomicExecParams {
+    let params = AtomicExecParamsRaw {
         msgs: gen_exec_msgs(other.clone()),
         inputs: gen_locked_state(&sn1, &sn2, &caller, &other),
     };
@@ -865,15 +864,15 @@ fn gen_locked_state(
     sn2: &SubnetID,
     caller: &Address,
     other: &Address,
-) -> HashMap<HierarchicalId, LockedStateInfo> {
+) -> HashMap<String, LockedStateInfo> {
     let lock_cid1 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test1"));
     let lock_cid2 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test2"));
-    let addr1 = Address::new_hierarchical(sn1, caller).unwrap().try_into().unwrap();
-    let addr2 = Address::new_hierarchical(sn2, other).unwrap().try_into().unwrap();
+    let addr1 = Address::new_hierarchical(sn1, caller).unwrap();
+    let addr2 = Address::new_hierarchical(sn2, other).unwrap();
     let act1 = Address::new_id(900);
     let act2 = Address::new_id(901);
     let mut m = HashMap::new();
-    m.insert(addr1, LockedStateInfo { cid: lock_cid1, actor: act1 });
-    m.insert(addr2, LockedStateInfo { cid: lock_cid2, actor: act2 });
+    m.insert(addr1.to_string(), LockedStateInfo { cid: lock_cid1, actor: act1 });
+    m.insert(addr2.to_string(), LockedStateInfo { cid: lock_cid2, actor: act2 });
     m
 }

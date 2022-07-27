@@ -8,9 +8,9 @@ use fvm_shared::address::{Address, SubnetID};
 use std::convert::TryFrom;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::taddress::{Hierarchical, TAddress, ID};
-use crate::tcid::{TAmt, TCid, THamt, TLink};
 use crate::{atomic, StorableMsg};
+use actor_primitives::taddress::{Hierarchical, TAddress, ID};
+use actor_primitives::tcid::{TAmt, TCid, THamt, TLink};
 
 /// Status of an atomic execution
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
@@ -172,9 +172,6 @@ impl AtomicExecParamsRaw {
         }
         Ok(AtomicExecParams { msgs: self.msgs, inputs: out })
     }
-}
-
-impl AtomicExecParams {
     /// Computes the CID for the atomic execution parameters. The input parameters
     /// for the execution determines the CID used to uniquely identify the execution.
     pub fn cid(&self) -> anyhow::Result<Cid> {
@@ -185,14 +182,23 @@ impl AtomicExecParams {
             msgs_array.batch_set(self.msgs.clone()).map_err(|e| e.into())
         })?;
 
-        for (k, v) in self.inputs.iter() {
-            meta.inputs_cid.update(&store, |input_map| {
-                input_map.set(k.to_bytes().into(), v.clone()).map_err(|e| {
+        eprintln!("set the msgs");
+
+        meta.inputs_cid.update(&store, |input_map| {
+            for (k, v) in self.inputs.iter() {
+                eprintln!("parsing address {k}");
+
+                let addr = Address::from_str(k)?;
+
+                eprintln!("got address {addr}");
+                input_map.set(addr.to_bytes().into(), v.clone()).map_err(|e| {
                     e.downcast_wrap(format!("failed to set input map to compute exec cid"))
                 })?;
-                Ok(())
-            })?;
-        }
+            }
+            Ok(())
+        })?;
+
+        eprintln!("set the inputs");
 
         let meta_cid: TCid<TLink<AtomicExecParamsMeta>> = TCid::new_link(&store, &meta)?;
 

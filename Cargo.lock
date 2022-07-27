@@ -3,6 +3,26 @@
 version = 3
 
 [[package]]
+name = "actor_primitives"
+version = "9.0.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "cid",
+ "fil_actors_runtime",
+ "fvm_ipld_blockstore",
+ "fvm_ipld_encoding",
+ "fvm_ipld_hamt",
+ "fvm_shared",
+ "indexmap",
+ "integer-encoding",
+ "lazy_static",
+ "log",
+ "num-derive",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
 name = "ahash"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -598,6 +618,7 @@ dependencies = [
 name = "fil_actor_hierarchical_sca"
 version = "9.0.0-alpha.1"
 dependencies = [
+ "actor_primitives",
  "anyhow",
  "cid",
  "fil_actors_runtime",

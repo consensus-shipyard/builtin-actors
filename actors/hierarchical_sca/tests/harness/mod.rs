@@ -1,12 +1,12 @@
 use std::borrow::Borrow;
+use std::str::FromStr;
 
+use actor_primitives::atomic::{UnlockParams, METHOD_ABORT, METHOD_UNLOCK};
+use actor_primitives::tcid::{TCid, TCidContent};
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::atomic::UnlockParams;
-use fil_actor_hierarchical_sca::atomic::METHOD_ABORT;
-use fil_actor_hierarchical_sca::atomic::METHOD_UNLOCK;
 use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::test_utils::expect_abort;
@@ -33,10 +33,9 @@ use lazy_static::lazy_static;
 
 use fil_actor_hierarchical_sca::checkpoint::ChildCheck;
 use fil_actor_hierarchical_sca::exec::{
-    AtomicExecParams, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
+    AtomicExecParamsRaw, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
 };
 use fil_actor_hierarchical_sca::ext;
-use fil_actor_hierarchical_sca::tcid::{TCid, TCidContent};
 use fil_actor_hierarchical_sca::{
     get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
     CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
@@ -618,7 +617,7 @@ impl Harness {
         &self,
         rt: &mut MockRuntime,
         caller: &Address,
-        params: AtomicExecParams,
+        params: AtomicExecParamsRaw,
         result: LockedOutput,
         code: ExitCode,
     ) -> Result<(), ActorError> {
@@ -648,7 +647,7 @@ impl Harness {
 
         let st: State = rt.get_state();
         let exec = st.get_atomic_exec(rt.store(), &ret.cid.into()).unwrap().unwrap();
-        assert_eq!(exec.params(), &params);
+        assert_eq!(exec.params(), &params.input_into_ids(rt).unwrap());
         assert_eq!(exec.status(), ExecStatus::Initialized);
         assert_eq!(ret, result);
 
@@ -659,7 +658,7 @@ impl Harness {
         &self,
         rt: &mut MockRuntime,
         caller: &Address,
-        exec_params: AtomicExecParams,
+        exec_params: AtomicExecParamsRaw,
         submit_params: SubmitExecParams,
         result: SubmitOutput,
         len_submitted: usize,
@@ -697,7 +696,8 @@ impl Harness {
                 panic!("execution should have been cleaned when finalized");
             }
             for (k, _) in exec_params.inputs.iter() {
-                let sn = k.subnet();
+                let addr = Address::from_str(k).unwrap();
+                let sn = addr.subnet().unwrap();
                 let sub = st.get_subnet(rt.store(), &sn).unwrap().unwrap();
                 let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
                 let msg = get_topdown_msg(&crossmsgs, 0).unwrap().unwrap();

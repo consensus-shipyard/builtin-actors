@@ -15,7 +15,7 @@ use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
 use lazy_static::lazy_static;
 use num_traits::Zero;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::atomic;
@@ -528,35 +528,20 @@ impl State {
         store: &BS,
         cid: &TCid<TLink<AtomicExecParamsMeta>>,
         exec: &AtomicExec,
-        output: atomic::SerializedState, /* FIXME: LockedState to propagate. The same as in SubmitAtomicExecParams*/
+        output: atomic::SerializedState, // LockableState to propagate. The same as in SubmitAtomicExecParams
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
-        let ks: Vec<_> = exec.params().inputs.clone().into_keys().collect();
-        let mut visited = HashMap::<SubnetID, bool>::new();
-        for k in ks.iter() {
+        let mut visited = HashSet::new();
+        let params = exec.params();
+        for (k, v) in params.inputs.iter() {
             let sn = k.subnet();
-            match visited.get(&sn) {
-                Some(_) => {
-                    continue;
-                }
-                None => {
-                    let p = exec.params();
-                    // send cross-message
-                    let input = match p.inputs.get(k) {
-                        Some(i) => i,
-                        None => {
-                            return Err(anyhow!(
-                                "input for subnet not found. unable to propagate the output message"
-                            ))
-                        }
-                    };
-                    let mut msg =
-                        self.exec_result_msg(&sn, &input.actor, &p.msgs[0], output.clone(), abort)?;
-                    self.send_cross(store, &mut msg, curr_epoch)?;
-                    // mark as sent
-                    visited.insert(sn, true);
-                }
+            if visited.get(&sn).is_none() {
+                let mut msg =
+                    self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;
+                self.send_cross(store, &mut msg, curr_epoch)?;
+                // mark as sent
+                visited.insert(sn);
             }
         }
 
