@@ -3,7 +3,7 @@ use cid::multihash::Code;
 use cid::Cid;
 use fil_actor_account::{Actor as AccountActor, State as AccountState};
 use fil_actor_cron::{Actor as CronActor, Entry as CronEntry, State as CronState};
-use fil_actor_hierarchical_sca::{Actor as SCAActor, State as SCAState};
+use fil_actor_hierarchical_sca::Actor as SCAActor;
 use fil_actor_init::{Actor as InitActor, ExecReturn, State as InitState};
 use fil_actor_market::{Actor as MarketActor, Method as MarketMethod, State as MarketState};
 use fil_actor_miner::{Actor as MinerActor, State as MinerState};
