@@ -49,6 +49,7 @@ members = [
      "state",
      "runtime",
      "test_vm",
+     "primitives",
 ]
 
 #[patch.crates-io]

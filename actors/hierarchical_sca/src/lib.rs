@@ -1,3 +1,4 @@
+use actor_primitives::{atomic, tcid};
 use cid::Cid;
 use exec::{
     is_addr_in_exec, is_common_parent, AtomicExec, AtomicExecParams, ExecStatus, LockedOutput,
@@ -30,7 +31,6 @@ pub use self::types::*;
 #[cfg(feature = "fil-actor")]
 fil_actors_runtime::wasm_trampoline!(Actor);
 
-pub mod atomic;
 pub mod checkpoint;
 mod cross;
 pub mod exec;
@@ -38,7 +38,6 @@ pub mod exec;
 pub mod ext;
 mod state;
 pub mod subnet;
-pub mod tcid;
 mod types;
 
 /// SCA actor methods available
@@ -648,7 +647,6 @@ impl Actor {
         RT: Runtime<BS>,
     {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
-
 
         // get cid for atomic execution
         let cid = params.cid().map_err(|e| {

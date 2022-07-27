@@ -1,3 +1,5 @@
+use actor_primitives::atomic::SerializedState;
+use actor_primitives::tcid::TCid;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
@@ -14,11 +16,9 @@ use fvm_shared::error::ExitCode;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use fil_actor_hierarchical_sca::atomic::SerializedState;
 use fil_actor_hierarchical_sca::exec::{
     AtomicExecParams, ExecStatus, LockedOutput, LockedStateInfo, SubmitExecParams, SubmitOutput,
 };
-use fil_actor_hierarchical_sca::tcid::TCid;
 use fil_actor_hierarchical_sca::{
     get_bottomup_msg, subnet, Actor as SCAActor, Checkpoint, State, StorableMsg,
     DEFAULT_CHECKPOINT_PERIOD,

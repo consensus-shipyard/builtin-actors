@@ -1,13 +1,12 @@
 use std::borrow::Borrow;
 use std::str::FromStr;
 
+use actor_primitives::atomic::{UnlockParams, METHOD_ABORT, METHOD_UNLOCK};
+use actor_primitives::tcid::{TCid, TCidContent};
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::atomic::UnlockParams;
-use fil_actor_hierarchical_sca::atomic::METHOD_ABORT;
-use fil_actor_hierarchical_sca::atomic::METHOD_UNLOCK;
 use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::test_utils::expect_abort;
@@ -37,7 +36,6 @@ use fil_actor_hierarchical_sca::exec::{
     AtomicExecParams, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
 };
 use fil_actor_hierarchical_sca::ext;
-use fil_actor_hierarchical_sca::tcid::{TCid, TCidContent};
 use fil_actor_hierarchical_sca::{
     get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
     CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
