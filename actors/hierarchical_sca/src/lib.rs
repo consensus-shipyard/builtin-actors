@@ -1,3 +1,4 @@
+use actor_primitives::taddress::TAddress;
 use actor_primitives::{atomic, tcid};
 use cid::Cid;
 use exec::{
@@ -21,6 +22,7 @@ use fvm_shared::{MethodNum, METHOD_CONSTRUCTOR};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
 use std::collections::HashMap;
+use std::convert::TryFrom;
 
 pub use self::checkpoint::{Checkpoint, CrossMsgMeta};
 pub use self::cross::{is_bottomup, CrossMsgs, HCMsgType, StorableMsg};
@@ -740,7 +742,11 @@ impl Actor {
         RT: Runtime<BS>,
     {
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
-        let caller = rt.message().caller();
+
+        let caller = TAddress::try_from(rt.message().caller()).map_err(|_| {
+            actor_error!(illegal_argument, "error translating caller address to ID")
+        })?;
+
         let mut out_status = ExecStatus::Initialized;
 
         rt.transaction(|st: &mut State, rt| {
@@ -782,7 +788,7 @@ impl Actor {
                     // check if the address already submitted an output
                     // FIXME: At this point we don't support the atomic execution between
                     // the same address in different subnets. This can be easily supported if needed.
-                    match exec.submitted().get(&caller.to_string()) {
+                    match exec.submitted().get(&caller.addr().to_string()) {
                         Some(_) => {
                             return Err(actor_error!(
                                 illegal_argument,
@@ -825,7 +831,7 @@ impl Actor {
                             format!("cid provided not equal to the ones submitted: {}", &cid)
                         ));
                     }
-                    exec.submitted_mut().insert(caller.to_string(), output_cid);
+                    exec.submitted_mut().insert(caller.addr().to_string(), output_cid);
                     // if all submissions collected
                     if exec.submitted().len() == exec.params().inputs.len() {
                         exec.set_status(ExecStatus::Success);
