@@ -14,7 +14,7 @@ use std::ops::{Deref, DerefMut};
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{TCid, TLink};
+/// use actor_primitives::tcid::{TCid, TLink};
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;

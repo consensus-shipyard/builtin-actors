@@ -1,20 +1,31 @@
+use actor_primitives::atomic::SerializedState;
+use actor_primitives::tcid::TCid;
+use cid::multihash::Code;
+use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::tcid::TCid;
-use fil_actor_hierarchical_sca::{
-    get_bottomup_msg, subnet, Actor as SCAActor, Checkpoint, State, DEFAULT_CHECKPOINT_PERIOD,
-};
+use fil_actor_hierarchical_sca::exec::AtomicExecParamsRaw;
 use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::BURNT_FUNDS_ACTOR_ADDR;
+use fvm_ipld_encoding::RawBytes;
+use fvm_ipld_encoding::DAG_CBOR;
 use fvm_shared::address::subnet::ROOTNET_ID;
 use fvm_shared::address::{Address, SubnetID};
 use fvm_shared::bigint::Zero;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
+use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::harness::*;
+use fil_actor_hierarchical_sca::exec::{
+    ExecStatus, LockedOutput, LockedStateInfo, SubmitExecParams, SubmitOutput,
+};
+use fil_actor_hierarchical_sca::{
+    get_bottomup_msg, subnet, Actor as SCAActor, Checkpoint, State, StorableMsg,
+    DEFAULT_CHECKPOINT_PERIOD,
+};
 
+use crate::harness::*;
 mod harness;
 
 #[test]
@@ -614,6 +625,254 @@ fn test_apply_msg() {
 }
 
 #[test]
+fn test_atomic_exec() {
+    let shid = SubnetID::new(&ROOTNET_ID, *SUBNET_ONE);
+    let (h, mut rt) = setup(shid.clone());
+
+    let caller = Address::new_id(1001);
+    let other = Address::new_id(1002);
+
+    let sn1 = SubnetID::new(&shid, *SUBNET_ONE);
+    let sn2 = SubnetID::new(&shid, *SUBNET_TWO);
+
+    // register subnets
+    let reg_value = TokenAmount::from(10_u64.pow(18));
+    h.register(&mut rt, &SUBNET_ONE, &reg_value, ExitCode::OK).unwrap();
+    h.register(&mut rt, &SUBNET_TWO, &reg_value, ExitCode::OK).unwrap();
+
+    let params = AtomicExecParamsRaw {
+        msgs: gen_exec_msgs(other.clone()),
+        inputs: gen_locked_state(&sn1, &sn2, &caller, &other),
+    };
+    let exec_cid = params.cid().unwrap();
+
+    // initialize execution
+    h.init_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::OK,
+    )
+    .unwrap();
+
+    // initialize again and fail
+    h.init_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+
+    // caller submits output
+    // FIXME: Use a proper serialized state from a sample LockableState?
+    let output = SerializedState::new(b"testOutput".to_vec());
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    h.submit_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        submit_params.clone(),
+        SubmitOutput { status: ExecStatus::Initialized },
+        1,
+        ExitCode::OK,
+    )
+    .unwrap();
+
+    // fail if resubmission or an address not involved in the execution
+    // sends and output
+    h.submit_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        submit_params.clone(),
+        SubmitOutput { status: ExecStatus::Initialized },
+        1,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+    let stranger = Address::new_id(1090);
+    h.submit_atomic_exec(
+        &mut rt,
+        &stranger,
+        params.clone(),
+        submit_params.clone(),
+        SubmitOutput { status: ExecStatus::Initialized },
+        1,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+
+    // submitting the wrong output fails
+    let output = SerializedState::new(b"wrongOutput".to_vec());
+    let wrong_params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    h.submit_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        wrong_params,
+        SubmitOutput { status: ExecStatus::Initialized },
+        1,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+
+    // execution succeeds and no new submission accepted
+    h.submit_atomic_exec(
+        &mut rt,
+        &other,
+        params.clone(),
+        submit_params.clone(),
+        SubmitOutput { status: ExecStatus::Success },
+        2,
+        ExitCode::OK,
+    )
+    .unwrap();
+    // as it succeeded the execution no longer exists
+    h.submit_atomic_exec(
+        &mut rt,
+        &other,
+        params.clone(),
+        submit_params,
+        SubmitOutput { status: ExecStatus::Success },
+        2,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+
+    // start a new execution and see that it is correctly added.
+    let stranger = Address::new_id(923);
+    let params = AtomicExecParamsRaw {
+        msgs: gen_exec_msgs(caller.clone()),
+        inputs: gen_locked_state(&sn1, &sn2, &caller, &stranger),
+    };
+    let exec_cid = params.cid().unwrap();
+
+    h.init_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::OK,
+    )
+    .unwrap();
+}
+
+#[test]
+fn test_abort_exec() {
+    let shid = SubnetID::new(&ROOTNET_ID, *SUBNET_ONE);
+    let (h, mut rt) = setup(shid.clone());
+
+    let caller = Address::new_id(1001);
+    let other = Address::new_id(1002);
+
+    let sn1 = SubnetID::new(&shid, *SUBNET_ONE);
+    let sn2 = SubnetID::new(&shid, *SUBNET_TWO);
+
+    // register subnets
+    let reg_value = TokenAmount::from(10_u64.pow(18));
+    h.register(&mut rt, &SUBNET_ONE, &reg_value, ExitCode::OK).unwrap();
+    h.register(&mut rt, &SUBNET_TWO, &reg_value, ExitCode::OK).unwrap();
+
+    let params = AtomicExecParamsRaw {
+        msgs: gen_exec_msgs(other.clone()),
+        inputs: gen_locked_state(&sn1, &sn2, &caller, &other),
+    };
+    let exec_cid = params.cid().unwrap();
+
+    // initialize execution
+    h.init_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        LockedOutput { cid: exec_cid },
+        ExitCode::OK,
+    )
+    .unwrap();
+    let output = SerializedState::new(b"testOutput".to_vec());
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    h.submit_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        submit_params.clone(),
+        SubmitOutput { status: ExecStatus::Initialized },
+        1,
+        ExitCode::OK,
+    )
+    .unwrap();
+
+    // execution aborted and no new submission accepted
+    let abort_params =
+        SubmitExecParams { cid: exec_cid, abort: true, output: SerializedState::default() };
+    h.submit_atomic_exec(
+        &mut rt,
+        &other,
+        params.clone(),
+        abort_params,
+        SubmitOutput { status: ExecStatus::Aborted },
+        1,
+        ExitCode::OK,
+    )
+    .unwrap();
+
+    // it no longer exists
+    let output = SerializedState::new(b"testOutput".to_vec());
+    let submit_params = SubmitExecParams { cid: exec_cid, abort: false, output };
+    h.submit_atomic_exec(
+        &mut rt,
+        &caller,
+        params.clone(),
+        submit_params,
+        SubmitOutput { status: ExecStatus::Aborted },
+        1,
+        ExitCode::USR_ILLEGAL_ARGUMENT,
+    )
+    .unwrap();
+}
+
+#[test]
 fn test_noop() {
     // TODO: Implement tests of what happens if the application
+}
+
+fn gen_exec_msgs(addr: Address) -> Vec<StorableMsg> {
+    return vec![
+        StorableMsg {
+            from: addr,
+            to: addr,
+            value: TokenAmount::zero(),
+            method: 2,
+            params: RawBytes::default(),
+            nonce: 0,
+        },
+        StorableMsg {
+            from: addr,
+            to: addr,
+            value: TokenAmount::zero(),
+            method: 2,
+            params: RawBytes::default(),
+            nonce: 0,
+        },
+    ];
+}
+
+fn gen_locked_state(
+    sn1: &SubnetID,
+    sn2: &SubnetID,
+    caller: &Address,
+    other: &Address,
+) -> HashMap<String, LockedStateInfo> {
+    let lock_cid1 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test1"));
+    let lock_cid2 = Cid::new_v1(DAG_CBOR, Code::Blake2b256.digest(b"test2"));
+    let addr1 = Address::new_hierarchical(sn1, caller).unwrap();
+    let addr2 = Address::new_hierarchical(sn2, other).unwrap();
+    let act1 = Address::new_id(900);
+    let act2 = Address::new_id(901);
+    let mut m = HashMap::new();
+    m.insert(addr1.to_string(), LockedStateInfo { cid: lock_cid1, actor: act1 });
+    m.insert(addr2.to_string(), LockedStateInfo { cid: lock_cid2, actor: act2 });
+    m
 }

@@ -1,11 +1,24 @@
+use std::borrow::Borrow;
+use std::str::FromStr;
+
+use actor_primitives::atomic::{UnlockParams, METHOD_ABORT, METHOD_UNLOCK};
+use actor_primitives::tcid::{TCid, TCidContent};
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actor_hierarchical_sca::tcid::TCid;
-use fil_actor_hierarchical_sca::tcid::TCidContent;
+use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
+use fil_actors_runtime::runtime::Runtime;
 use fil_actors_runtime::test_utils::expect_abort;
+use fil_actors_runtime::test_utils::{
+    MockRuntime, ACCOUNT_ACTOR_CODE_ID, MULTISIG_ACTOR_CODE_ID, SUBNET_ACTOR_CODE_ID,
+    SYSTEM_ACTOR_CODE_ID,
+};
 use fil_actors_runtime::Array;
+use fil_actors_runtime::{
+    make_map_with_root_and_bitwidth, ActorError, Map, BURNT_FUNDS_ACTOR_ADDR, REWARD_ACTOR_ADDR,
+    SCA_ACTOR_ADDR, STORAGE_POWER_ACTOR_ADDR, SYSTEM_ACTOR_ADDR,
+};
 use fvm_ipld_blockstore::Blockstore;
 use fvm_ipld_encoding::RawBytes;
 use fvm_shared::address::subnet::ROOTNET_ID;
@@ -19,21 +32,14 @@ use fvm_shared::METHOD_SEND;
 use lazy_static::lazy_static;
 
 use fil_actor_hierarchical_sca::checkpoint::ChildCheck;
+use fil_actor_hierarchical_sca::exec::{
+    AtomicExecParamsRaw, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
+};
 use fil_actor_hierarchical_sca::ext;
 use fil_actor_hierarchical_sca::{
     get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
     CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
     DEFAULT_CHECKPOINT_PERIOD, MAX_NONCE, MIN_COLLATERAL_AMOUNT,
-};
-use fil_actors_runtime::builtin::HAMT_BIT_WIDTH;
-use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::test_utils::{
-    MockRuntime, ACCOUNT_ACTOR_CODE_ID, MULTISIG_ACTOR_CODE_ID, SUBNET_ACTOR_CODE_ID,
-    SYSTEM_ACTOR_CODE_ID,
-};
-use fil_actors_runtime::{
-    make_map_with_root_and_bitwidth, ActorError, Map, BURNT_FUNDS_ACTOR_ADDR, REWARD_ACTOR_ADDR,
-    SCA_ACTOR_ADDR, STORAGE_POWER_ACTOR_ADDR, SYSTEM_ACTOR_ADDR,
 };
 
 use crate::SCAActor;
@@ -422,13 +428,13 @@ impl Harness {
         let msg = StorableMsg {
             from: from.clone(),
             to: to.clone(),
-            nonce: nonce,
+            nonce,
             method: METHOD_SEND,
             params: RawBytes::default(),
             value: value.clone(),
         };
         let dest = sub.clone();
-        let params = CrossMsgParams { destination: sub, msg: msg };
+        let params = CrossMsgParams { destination: sub, msg };
         if code != ExitCode::OK {
             expect_abort(
                 code,
@@ -604,6 +610,115 @@ impl Harness {
         if noop {
             panic!("TODO: Not implemented yet");
         }
+        Ok(())
+    }
+
+    pub fn init_atomic_exec(
+        &self,
+        rt: &mut MockRuntime,
+        caller: &Address,
+        params: AtomicExecParamsRaw,
+        result: LockedOutput,
+        code: ExitCode,
+    ) -> Result<(), ActorError> {
+        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, *caller);
+        rt.expect_validate_caller_type(vec![*ACCOUNT_ACTOR_CODE_ID, *MULTISIG_ACTOR_CODE_ID]);
+
+        if code != ExitCode::OK {
+            expect_abort(
+                code,
+                rt.call::<SCAActor>(
+                    Method::InitAtomicExec as MethodNum,
+                    &RawBytes::serialize(params).unwrap(),
+                ),
+            );
+            rt.verify();
+            return Ok(());
+        }
+
+        let ret = rt
+            .call::<SCAActor>(
+                Method::InitAtomicExec as MethodNum,
+                &RawBytes::serialize(params.clone()).unwrap(),
+            )
+            .unwrap();
+        rt.verify();
+        let ret: LockedOutput = RawBytes::deserialize(&ret).unwrap();
+
+        let st: State = rt.get_state();
+        let exec = st.get_atomic_exec(rt.store(), &ret.cid.into()).unwrap().unwrap();
+        let params = rt.call_fn(|rt| params.input_into_ids(rt)).unwrap();
+        assert_eq!(exec.params(), &params);
+        assert_eq!(exec.status(), ExecStatus::Initialized);
+        assert_eq!(ret, result);
+
+        Ok(())
+    }
+
+    pub fn submit_atomic_exec(
+        &self,
+        rt: &mut MockRuntime,
+        caller: &Address,
+        exec_params: AtomicExecParamsRaw,
+        submit_params: SubmitExecParams,
+        result: SubmitOutput,
+        len_submitted: usize,
+        code: ExitCode,
+    ) -> Result<(), ActorError> {
+        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, *caller);
+        rt.expect_validate_caller_type(vec![*ACCOUNT_ACTOR_CODE_ID, *MULTISIG_ACTOR_CODE_ID]);
+
+        if code != ExitCode::OK {
+            expect_abort(
+                code,
+                rt.call::<SCAActor>(
+                    Method::SubmitAtomicExec as MethodNum,
+                    &RawBytes::serialize(submit_params).unwrap(),
+                ),
+            );
+            rt.verify();
+            return Ok(());
+        }
+
+        let ret = rt
+            .call::<SCAActor>(
+                Method::SubmitAtomicExec as MethodNum,
+                &RawBytes::serialize(submit_params.clone()).unwrap(),
+            )
+            .unwrap();
+        rt.verify();
+        let ret: SubmitOutput = RawBytes::deserialize(&ret).unwrap();
+
+        let st: State = rt.get_state();
+
+        if result.status != ExecStatus::Initialized {
+            // Check that the execution has been cleaned after it's finalized
+            if st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().is_some() {
+                panic!("execution should have been cleaned when finalized");
+            }
+            for (k, _) in exec_params.inputs.iter() {
+                let addr = Address::from_str(k).unwrap();
+                let sn = addr.subnet().unwrap();
+                let sub = st.get_subnet(rt.store(), &sn).unwrap().unwrap();
+                let crossmsgs = sub.top_down_msgs.load(rt.store()).unwrap();
+                let msg = get_topdown_msg(&crossmsgs, 0).unwrap().unwrap();
+                match result.status {
+                    ExecStatus::Aborted => assert_eq!(msg.method, METHOD_ABORT),
+                    ExecStatus::Success => {
+                        assert_eq!(msg.method, METHOD_UNLOCK);
+                        let uparams = UnlockParams::from_raw_bytes(msg.params.borrow()).unwrap();
+                        assert_eq!(uparams.state, submit_params.output);
+                    }
+                    _ => panic!("wrong method in cross-net message propagating atomic exec result"),
+                }
+            }
+        } else {
+            let exec = st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().unwrap();
+            assert_eq!(exec.status(), result.status);
+            assert_eq!(exec.submitted().len(), len_submitted);
+            assert_eq!(ret, result);
+        }
+
         Ok(())
     }
 

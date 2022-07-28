@@ -17,7 +17,7 @@ use super::{TCid, TCidContent};
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{TCid, THamt};
+/// use actor_primitives::tcid::{TCid, THamt};
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;

@@ -18,7 +18,7 @@ const AMT_BIT_WIDTH: u32 = 3;
 ///
 /// # Example
 /// ```
-/// use fil_actor_hierarchical_sca::tcid::{TCid, TAmt};
+/// use actor_primitives::tcid::{TCid, TAmt};
 /// use fvm_ipld_blockstore::MemoryBlockstore;
 /// use fvm_ipld_encoding::tuple::*;
 /// use fvm_ipld_encoding::Cbor;

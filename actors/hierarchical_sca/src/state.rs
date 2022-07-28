@@ -3,22 +3,23 @@
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
-use fil_actors_runtime::{ActorDowncast, Map};
+use fil_actors_runtime::{ActorDowncast, Map, SYSTEM_ACTOR_ADDR};
 use fvm_ipld_blockstore::Blockstore;
-use fvm_ipld_encoding::tuple::*;
 use fvm_ipld_encoding::Cbor;
+use fvm_ipld_encoding::{tuple::*, RawBytes};
 use fvm_ipld_hamt::BytesKey;
-use fvm_shared::address::SubnetID;
+use fvm_shared::address::{Address, SubnetID};
 use fvm_shared::bigint::{bigint_ser, BigInt};
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 use fvm_shared::error::ExitCode;
 use lazy_static::lazy_static;
 use num_traits::Zero;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
-use crate::atomic::AtomicExec;
+use crate::atomic;
+use crate::exec::{AtomicExec, AtomicExecParams, AtomicExecParamsMeta};
 use crate::tcid::{TAmt, TCid, THamt, TLink};
 
 use super::checkpoint::*;
@@ -478,6 +479,117 @@ impl State {
     pub fn noop_msg(&self) {
         panic!("error committing cross-msg. noop should be returned but not implemented yet");
     }
+
+    /// Gets an atomic execution by cid from the state
+    pub fn get_atomic_exec<BS: Blockstore>(
+        &self,
+        store: &BS,
+        cid: &TCid<TLink<AtomicExecParams>>,
+    ) -> anyhow::Result<Option<AtomicExec>> {
+        let registry = self.atomic_exec_registry.load(store)?;
+        let exec = get_atomic_exec(&registry, cid)?;
+        Ok(exec.cloned())
+    }
+
+    /// Sets a new atomic exec with Cid
+    pub fn set_atomic_exec<BS: Blockstore>(
+        &mut self,
+        store: &BS,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
+        exec: AtomicExec,
+    ) -> anyhow::Result<()> {
+        self.atomic_exec_registry.update(store, |registry| {
+            registry
+                .set(cid.cid().to_bytes().into(), exec)
+                .map_err(|e| e.downcast_wrap(format!("failed to set atomic exec")))?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    pub fn rm_atomic_exec<BS: Blockstore>(
+        &mut self,
+        store: &BS,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
+    ) -> anyhow::Result<()> {
+        self.atomic_exec_registry.update(store, |registry| {
+            registry
+                .delete(&cid.cid().to_bytes())
+                .map_err(|e| e.downcast_wrap(format!("failed to delete atomic exec")))?;
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    /// Propagates the result of an execution to the corresponding subnets
+    /// in a cross-net message.
+    pub fn propagate_exec_result<BS: Blockstore>(
+        &mut self,
+        store: &BS,
+        cid: &TCid<TLink<AtomicExecParamsMeta>>,
+        exec: &AtomicExec,
+        output: atomic::SerializedState, // LockableState to propagate. The same as in SubmitAtomicExecParams
+        curr_epoch: ChainEpoch,
+        abort: bool,
+    ) -> anyhow::Result<()> {
+        let mut visited = HashSet::new();
+        let params = exec.params();
+        for (k, v) in params.inputs.iter() {
+            let sn = k.0.subnet();
+            if visited.get(&sn).is_none() {
+                let mut msg =
+                    self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;
+                self.send_cross(store, &mut msg, curr_epoch)?;
+                // mark as sent
+                visited.insert(sn);
+            }
+        }
+
+        // after propagating the execution result it is safe to remove the finalized execution
+        // from the registry. Users looking to list previous atomic executions, we'll need
+        // to inspect previous state (but this is a UX matter).
+        self.rm_atomic_exec(store, cid)?;
+
+        Ok(())
+    }
+
+    fn exec_result_msg(
+        &self,
+        subnet: &SubnetID,
+        actor: &Address,
+        msg: &StorableMsg,
+        output: atomic::SerializedState, /* FIXME: LockedState to propagate. The same as in SubmitAtomicExecParams*/
+        abort: bool,
+    ) -> anyhow::Result<StorableMsg> {
+        // to signal that is a system message we use system_actor_addr as source.
+        let from = Address::new_hierarchical(&self.network_name, &SYSTEM_ACTOR_ADDR)?;
+        let to = Address::new_hierarchical(subnet, actor)?;
+        let lock_params = atomic::LockParams::new(msg.method, msg.clone().params);
+        if abort {
+            let method = atomic::METHOD_ABORT;
+            let enc = RawBytes::serialize(lock_params)?;
+            return Ok(StorableMsg {
+                to,
+                from,
+                value: TokenAmount::zero(),
+                nonce: self.nonce,
+                method,
+                params: enc,
+            });
+        }
+
+        let method = atomic::METHOD_UNLOCK;
+        let unlock_params = atomic::UnlockParams::new(lock_params, output);
+        let enc = RawBytes::serialize(unlock_params)?;
+        return Ok(StorableMsg {
+            to,
+            from,
+            value: TokenAmount::zero(),
+            nonce: self.nonce,
+            method,
+            params: enc,
+        });
+    }
 }
 
 pub fn set_subnet<BS: Blockstore>(
@@ -556,4 +668,14 @@ pub fn get_topdown_msg<'m, BS: Blockstore>(
     nonce: u64,
 ) -> anyhow::Result<Option<&'m StorableMsg>> {
     crossmsgs.get(nonce).map_err(|e| anyhow!("failed to get msg by nonce: {}", e))
+}
+
+fn get_atomic_exec<'m, BS: Blockstore>(
+    registry: &'m Map<BS, AtomicExec>,
+    cid: &TCid<TLink<AtomicExecParams>>,
+) -> anyhow::Result<Option<&'m AtomicExec>> {
+    let c = cid.cid();
+    registry
+        .get(&c.to_bytes())
+        .map_err(|e| e.downcast_wrap(format!("failed to get atomic exec for cid {}", c)))
 }
