@@ -1,27 +1,16 @@
+use anyhow::anyhow;
+
 use cid::multihash::Code::Blake2b256;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
 use fil_actors_runtime::cbor;
-use fvm_ipld_encoding::{serde_bytes, tuple::*, Cbor, RawBytes, DAG_CBOR};
-use fvm_shared::MethodNum;
+use fvm_ipld_encoding::{tuple::*, Cbor, RawBytes, DAG_CBOR};
+use fvm_shared::bigint::bigint_ser;
+use fvm_shared::{address::Address, econ::TokenAmount, MethodNum};
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 
 use crate::tcid::{TCid, THamt};
-
-/// MethodNum to lock some state in an actor
-/// This methods are only supported in actors
-/// that support atomic executions.
-pub const METHOD_LOCK: MethodNum = 2;
-/// MethodNum used to trigger the merge of an input with
-/// other input locked states.
-pub const METHOD_MERGE: MethodNum = 3;
-/// MethodNum called to signal the abortion of an atomic execution
-/// and the unlock of all locked states in the actor for the execution
-pub const METHOD_ABORT: MethodNum = 4;
-/// MethodNum to trigger the merge of the output of an execution
-/// into the state of an actor, and the unlock of all locked states.
-pub const METHOD_UNLOCK: MethodNum = 5;
 
 /// Trait that determines the functions that need to be implemented by
 /// a state object to be lockable and be used in an atomic execution.
@@ -29,7 +18,7 @@ pub const METHOD_UNLOCK: MethodNum = 5;
 /// Different strategies may be used to merge different locked state to
 /// prepare the actor state for the execution, and for the merging of the
 /// output of the execution to the original state of the actor.
-pub trait MergeableState<S: Serialize + DeserializeOwned> {
+pub trait MergeableState {
     /// Merge a locked state (not necessarily the output) to the current state.
     fn merge(&mut self, other: Self) -> anyhow::Result<()>;
     /// Merge the output of an execution to the current state.
@@ -38,20 +27,34 @@ pub trait MergeableState<S: Serialize + DeserializeOwned> {
 
 /// Internal map kept by actor supporting atomic executions to track
 /// the states that have been locked and are used in an atomic exec.
-pub type LockedMap<T> = TCid<THamt<Cid, LockableState<T>>>;
+pub type LockedMap = TCid<THamt<Cid, SerializedState>>;
 
+/// StorableMsg stores all the relevant information required
+/// to execute cross-messages.
+///
+/// We follow this approach because we can't directly store types.Message
+/// as we did in the actor's Go counter-part. Instead we just persist the
+/// information required to create the cross-messages and execute in the
+/// corresponding node implementation.
+// FIXME: Take StorableMsg from cross.rs and put it here.
+#[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
+pub struct StorableMsg {
+    pub from: Address,
+    pub to: Address,
+    pub method: MethodNum,
+    pub params: RawBytes,
+    #[serde(with = "bigint_ser")]
+    pub value: TokenAmount,
+    pub nonce: u64,
+}
+
+impl Cbor for StorableMsg {}
 /// Trait that specifies the interface of an actor state able to support
 /// atomic executions.
-pub trait LockableActorState<T>
-where
-    T: Serialize + DeserializeOwned + MergeableState<T>,
-{
+pub trait LockableActorState {
     /// Map with all the locked state in the actor uniquely identified through
     /// their Cid.
-    fn locked_map_cid(&self) -> LockedMap<T>;
-    /// Returns the output state of an execution from the current state
-    /// of the actor according to the input parameters.
-    fn output(&self, params: LockParams) -> LockableState<T>;
+    fn locked_map_cid(&self) -> LockedMap;
 }
 
 /// Return type for all actor functions.
@@ -65,41 +68,125 @@ type ActorResult = anyhow::Result<Option<RawBytes>>;
 /// The functions of this trait represent the set of methods that
 /// and actor support atomic executions needs to implement. Correspondingly,
 /// it follows the same return convention used for every FVM actor method.
-pub trait LockableActor<T, S>
+pub trait LockableActor<S>
 where
-    T: Serialize + DeserializeOwned + MergeableState<T>,
-    S: Serialize + DeserializeOwned + LockableActorState<T>,
+    S: Serialize + DeserializeOwned + LockableActorState,
 {
-    /// Locks the state to perform the execution determined by the locking params.
+    const METHOD_LOCK: MethodNum = 2;
+    const METHOD_MERGE: MethodNum = 3;
+    const METHOD_ABORT: MethodNum = 4;
+    const METHOD_UNLOCK: MethodNum = 5;
     fn lock(params: LockParams) -> ActorResult;
-    /// Merges some state to the current state of the actor to prepare for the execution
-    /// of the protocol.
-    fn merge(params: MergeParams<T>) -> ActorResult;
-    /// Merges the output state of an execution to the actor and unlocks the state
-    /// involved in the execution.
-    fn unlock(params: UnlockParams) -> ActorResult;
-    /// Aborts the execution and unlocks the locked state.
+    fn pre_commit() -> ActorResult;
+    fn commit(params: LockParams) -> ActorResult;
     fn abort(params: LockParams) -> ActorResult;
-    /// Returns the lockable state of the actor.
     fn state(params: LockParams) -> S;
+}
+
+type TypeCode = String;
+pub trait StateType {
+    fn state_type(&self) -> TypeCode;
+}
+
+#[macro_export]
+macro_rules! register_types {
+    ($($typ:ident),+) => {
+        $(
+            impl StateType for $typ {
+                fn state_type(&self) -> TypeCode {
+                    stringify!($typ).to_string()
+                }
+            }
+        )*
+    };
+}
+
+macro_rules! build {
+    ($($body:tt)*) => {
+        as_item! {
+            enum STypes { $($body)* }
+        }
+    };
+}
+
+macro_rules! as_item {
+    ($i:item) => {
+        $i
+    };
+}
+
+impl<T> Into<SerializedState> for State<T>
+where
+    T: MergeableState + StateType + Serialize + DeserializeOwned,
+{
+    fn into(self) -> SerializedState {
+        SerializedState { t: self.s.state_type(), ser: RawBytes::serialize(self.s).unwrap().into() }
+    }
+}
+
+/// Serializes exactly as its underlying `Cid`.
+impl<T> serde::Serialize for State<T>
+where
+    T: MergeableState + StateType + Serialize + DeserializeOwned,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        SerializedState { t: self.s.state_type(), ser: RawBytes::serialize(&self.s).unwrap() }
+            .serialize(serializer)
+    }
+}
+
+impl<'d, T> serde::Deserialize<'d> for State<T>
+where
+    T: MergeableState + StateType + Serialize + DeserializeOwned,
+    Self: TryFrom<SerializedState>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'d>,
+    {
+        RawBytes::deserialize(&SerializedState::deserialize(deserializer)?.ser)
+            .map_err(|e| serde::de::Error::custom(format!("error deserializing state: {}", e)))
+    }
 }
 
 /// Serialized representation of the locked state of an actor.
 #[derive(Debug, PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple, Default)]
 pub struct SerializedState {
-    #[serde(with = "serde_bytes")]
-    ser: Vec<u8>,
+    /// type of the serialized state
+    t: TypeCode,
+    /// serialization of the state
+    // #[serde(with = "serde_bytes")]
+    ser: RawBytes,
 }
-impl SerializedState {
-    // TODO: This is used for testing purposes in order to have all the
-    // SCA functions running. In the next iteration we will implement proper
-    // primitives to get from/to a MergeableState to SerializedState using
-    // code-gen and generics.
-    pub fn new(ser: Vec<u8>) -> Self {
-        SerializedState { ser }
+
+pub struct State<T>
+where
+    T: MergeableState + StateType + Serialize + DeserializeOwned,
+{
+    s: T,
+}
+
+impl<T> State<T>
+where
+    T: MergeableState + StateType + Serialize + DeserializeOwned,
+{
+    pub fn new(s: T) -> Self {
+        Self { s }
     }
-    pub fn cid(&self) -> Cid {
-        Cid::new_v1(DAG_CBOR, Blake2b256.digest(self.ser.as_slice()))
+
+    pub fn cid(&self) -> anyhow::Result<Cid> {
+        let ser = RawBytes::serialize(&self)?;
+        Ok(Cid::new_v1(DAG_CBOR, Blake2b256.digest(ser.as_slice())))
+    }
+
+    pub fn from_serialized(value: &SerializedState) -> anyhow::Result<Self> {
+        // if get_type_code!(T).to_string() != value.t {
+        //     return Err(anyhow!("error: serialized state has the wrong type"));
+        // }
+        Ok(State::new(RawBytes::deserialize(&value.ser)?))
     }
 }
 
@@ -112,26 +199,14 @@ impl SerializedState {
 /// that needs to be locked.
 #[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockParams {
-    pub method: MethodNum,
-    pub params: RawBytes,
+    msgs: Vec<StorableMsg>,
 }
 impl Cbor for LockParams {}
 impl LockParams {
-    pub fn new(method: MethodNum, params: RawBytes) -> Self {
-        LockParams { method, params }
+    pub fn new(msgs: Vec<StorableMsg>) -> Self {
+        LockParams { msgs }
     }
 }
-
-/// Parameters used to specify the input state to merge to the current
-/// state of an actor to perform the atomic execution.
-#[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct MergeParams<T>
-where
-    T: Serialize + DeserializeOwned + MergeableState<T>,
-{
-    state: T,
-}
-impl<T: Serialize + DeserializeOwned + MergeableState<T>> Cbor for MergeParams<T> {}
 
 /// Unlock parameters that pass the output of the execution as the serialized
 /// output state of the execution, along with the lock parameters that determines
@@ -152,13 +227,31 @@ impl UnlockParams {
     }
 }
 
-/// State of an actor including a lock to support atomic executions.
-#[derive(Serialize_tuple, Deserialize_tuple)]
-pub struct LockableState<T>
-where
-    T: Serialize + DeserializeOwned + MergeableState<T>,
-{
-    lock: bool,
-    state: T,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple, Default)]
+    pub struct TestType {
+        pub dummy: u64,
+    }
+    register_types!(TestType);
+
+    impl MergeableState for TestType {
+        fn merge(&mut self, _other: Self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn merge_output(&mut self, _other: Self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_types() {
+        let a = TestType { dummy: 1 };
+        assert_eq!(a.state_type(), "TestType");
+        let st = State::new(a);
+        let ser: SerializedState = st.into();
+        State::<TestType>::from_serialized(&ser).unwrap();
+    }
 }
-impl<T: Serialize + DeserializeOwned + MergeableState<T>> Cbor for LockableState<T> {}
