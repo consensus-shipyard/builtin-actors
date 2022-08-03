@@ -32,7 +32,7 @@ pub use self::types::*;
 fil_actors_runtime::wasm_trampoline!(Actor);
 
 pub mod checkpoint;
-mod cross;
+pub mod cross;
 #[doc(hidden)]
 pub mod ext;
 mod state;
@@ -545,7 +545,7 @@ impl Actor {
     /// - Determines the type of cross-message.
     /// - Performs the corresponding state changes.
     /// - And updated the latest nonce applied for future checks.
-    fn apply_msg<BS, RT>(rt: &mut RT, params: StorableMsg) -> Result<(), ActorError>
+    fn apply_msg<BS, RT>(rt: &mut RT, params: StorableMsg) -> Result<ApplyMsgOutput, ActorError>
     where
         BS: Blockstore,
         RT: Runtime<BS>,
@@ -583,8 +583,7 @@ impl Actor {
                 })?;
                 // if directed to current network, execute message.
                 if sto == read_st.network_name {
-                    // FIXME: Should we handle return in some way?
-                    let _ = run_cross_msg(rt, &msg)?;
+                    return Ok(ApplyMsgOutput { output: run_cross_msg(rt, &msg)? });
                 }
             }
             Ok(HCMsgType::TopDown) => {
@@ -621,8 +620,7 @@ impl Actor {
 
                 // if directed to the current network propagate the message
                 if sto == read_st.network_name {
-                    // FIXME: Should we handle return in some way?
-                    let _ = run_cross_msg(rt, &msg)?;
+                    return Ok(ApplyMsgOutput { output: run_cross_msg(rt, &msg)? });
                 }
             }
             _ => {
@@ -631,9 +629,8 @@ impl Actor {
                     "cross-message to apply dosen't have the right type"
                 ));
             }
-        };
-
-        Ok(())
+        }
+        Ok(ApplyMsgOutput { output: RawBytes::default() })
     }
 
     /// Initializes an atomic execution to be orchestrated by the current subnet.
@@ -860,8 +857,8 @@ impl ActorCode for Actor {
                 Ok(RawBytes::default())
             }
             Some(Method::ApplyMessage) => {
-                Self::apply_msg(rt, cbor::deserialize_params(params)?)?;
-                Ok(RawBytes::default())
+                let res = Self::apply_msg(rt, cbor::deserialize_params(params)?)?;
+                Ok(RawBytes::serialize(res)?)
             }
             Some(Method::InitAtomicExec) => {
                 let res = Self::init_atomic_exec(rt, cbor::deserialize_params(params)?)?;

@@ -628,8 +628,10 @@ impl State {
                 // common checks
                 atomic_exec_checks(&exec, &cid, &caller)?;
 
+                // TODO:
                 // check that that the input state has been correctly
                 // linked to the execution.
+                panic!("Linked Cid check not implemented yet");
 
                 // check if all the submitted are equal to current cid
                 let out_cids: Vec<Cid> = exec.submitted().values().cloned().collect();

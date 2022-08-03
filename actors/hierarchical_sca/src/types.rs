@@ -1,5 +1,5 @@
 use fil_actors_runtime::Array;
-use fvm_ipld_encoding::tuple::*;
+use fvm_ipld_encoding::{tuple::*, RawBytes};
 use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::clock::ChainEpoch;
@@ -37,4 +37,11 @@ pub struct CheckpointParams {
 pub struct CrossMsgParams {
     pub msg: StorableMsg,
     pub destination: SubnetID,
+}
+
+/// Wrapper for the output of the result for the application of a
+/// cross-message validation
+#[derive(Serialize_tuple, Deserialize_tuple, Clone)]
+pub struct ApplyMsgOutput {
+    pub output: RawBytes,
 }

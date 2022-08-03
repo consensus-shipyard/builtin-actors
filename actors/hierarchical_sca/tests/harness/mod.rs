@@ -1,8 +1,12 @@
 use std::borrow::Borrow;
 use std::str::FromStr;
 
-use actor_primitives::atomic::{UnlockParams, METHOD_ABORT, METHOD_UNLOCK};
+use actor_primitives::atomic::params::{
+    AtomicExecParamsRaw, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
+};
+use actor_primitives::atomic::{METHOD_ABORT, METHOD_COMMIT};
 use actor_primitives::tcid::{TCid, TCidContent};
+use actor_primitives::types::{is_bottomup, HCMsgType, StorableMsg};
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
@@ -32,14 +36,12 @@ use fvm_shared::METHOD_SEND;
 use lazy_static::lazy_static;
 
 use fil_actor_hierarchical_sca::checkpoint::ChildCheck;
-use fil_actor_hierarchical_sca::exec::{
-    AtomicExecParamsRaw, ExecStatus, LockedOutput, SubmitExecParams, SubmitOutput,
-};
-use fil_actor_hierarchical_sca::ext;
+use fil_actor_hierarchical_sca::cross::CrossMsgs;
+use fil_actor_hierarchical_sca::{ext, ApplyMsgOutput, CrossMethod};
 use fil_actor_hierarchical_sca::{
-    get_topdown_msg, is_bottomup, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams,
-    CrossMsgs, FundParams, HCMsgType, Method, State, StorableMsg, Subnet, CROSSMSG_AMT_BITWIDTH,
-    DEFAULT_CHECKPOINT_PERIOD, MAX_NONCE, MIN_COLLATERAL_AMOUNT,
+    get_topdown_msg, Checkpoint, ConstructorParams, CrossMsgMeta, CrossMsgParams, FundParams,
+    Method, State, Subnet, CROSSMSG_AMT_BITWIDTH, DEFAULT_CHECKPOINT_PERIOD, MAX_NONCE,
+    MIN_COLLATERAL_AMOUNT,
 };
 
 use crate::SCAActor;
@@ -662,38 +664,54 @@ impl Harness {
         exec_params: AtomicExecParamsRaw,
         submit_params: SubmitExecParams,
         result: SubmitOutput,
+        msg_nonce: u64,
         len_submitted: usize,
         code: ExitCode,
     ) -> Result<(), ActorError> {
-        rt.set_caller(*ACCOUNT_ACTOR_CODE_ID, *caller);
-        rt.expect_validate_caller_type(vec![*ACCOUNT_ACTOR_CODE_ID, *MULTISIG_ACTOR_CODE_ID]);
+        rt.set_caller(*SYSTEM_ACTOR_CODE_ID, *SYSTEM_ACTOR_ADDR);
+        rt.expect_validate_caller_addr(vec![*SYSTEM_ACTOR_ADDR]);
 
+        let st: State = rt.get_state();
+        let sto = caller.subnet().unwrap();
+
+        let params = StorableMsg {
+            from: caller.clone(),
+            to: *SCA_ACTOR_ADDR,
+            method: CrossMethod::SubmitAtomicExec as MethodNum,
+            value: TokenAmount::zero(),
+            params: RawBytes::serialize(&submit_params).unwrap(),
+            nonce: msg_nonce,
+        };
+
+        // if expected code is not ok
         if code != ExitCode::OK {
             expect_abort(
                 code,
                 rt.call::<SCAActor>(
-                    Method::SubmitAtomicExec as MethodNum,
-                    &RawBytes::serialize(submit_params).unwrap(),
+                    Method::ApplyMessage as MethodNum,
+                    &RawBytes::serialize(params).unwrap(),
                 ),
             );
             rt.verify();
             return Ok(());
         }
 
-        let ret = rt
-            .call::<SCAActor>(
-                Method::SubmitAtomicExec as MethodNum,
-                &RawBytes::serialize(submit_params.clone()).unwrap(),
-            )
-            .unwrap();
+        let ret = rt.call::<SCAActor>(
+            Method::ApplyMessage as MethodNum,
+            &RawBytes::serialize(params).unwrap(),
+        )?;
         rt.verify();
-        let ret: SubmitOutput = RawBytes::deserialize(&ret).unwrap();
+        let st: State = rt.get_state();
+        assert_eq!(st.applied_bottomup_nonce, msg_nonce);
+
+        let ret: ApplyMsgOutput = RawBytes::deserialize(&ret).unwrap();
+        let ret: SubmitOutput = RawBytes::deserialize(&ret.output).unwrap();
 
         let st: State = rt.get_state();
 
         if result.status != ExecStatus::Initialized {
             // Check that the execution has been cleaned after it's finalized
-            if st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().is_some() {
+            if st.get_atomic_exec(rt.store(), &submit_params.exec_cid.into()).unwrap().is_some() {
                 panic!("execution should have been cleaned when finalized");
             }
             for (k, _) in exec_params.inputs.iter() {
@@ -705,15 +723,17 @@ impl Harness {
                 match result.status {
                     ExecStatus::Aborted => assert_eq!(msg.method, METHOD_ABORT),
                     ExecStatus::Success => {
-                        assert_eq!(msg.method, METHOD_UNLOCK);
-                        let uparams = UnlockParams::from_raw_bytes(msg.params.borrow()).unwrap();
-                        assert_eq!(uparams.state, submit_params.output);
+                        assert_eq!(msg.method, METHOD_COMMIT);
+                        // FIXME: Add additional param checks
+                        // let uparams = UnlockParams::from_raw_bytes(msg.params.borrow()).unwrap();
+                        // assert_eq!(uparams.state, submit_params.output);
                     }
                     _ => panic!("wrong method in cross-net message propagating atomic exec result"),
                 }
             }
         } else {
-            let exec = st.get_atomic_exec(rt.store(), &submit_params.cid.into()).unwrap().unwrap();
+            let exec =
+                st.get_atomic_exec(rt.store(), &submit_params.exec_cid.into()).unwrap().unwrap();
             assert_eq!(exec.status(), result.status);
             assert_eq!(exec.submitted().len(), len_submitted);
             assert_eq!(ret, result);

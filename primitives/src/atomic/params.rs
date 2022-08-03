@@ -1,8 +1,10 @@
 use anyhow::anyhow;
+use cid::multihash::Code;
+use cid::multihash::MultihashDigest;
 use cid::Cid;
 use fil_actors_runtime::{runtime::Runtime, ActorDowncast};
 use fvm_ipld_blockstore::{Blockstore, MemoryBlockstore};
-use fvm_ipld_encoding::repr::*;
+use fvm_ipld_encoding::{repr::*, DAG_CBOR};
 use fvm_ipld_encoding::{tuple::*, Cbor};
 use fvm_shared::address::{Address, SubnetID};
 use std::convert::TryFrom;
@@ -91,6 +93,18 @@ pub struct SubmitExecParams {
 impl Cbor for SubmitExecParams {}
 
 impl SubmitExecParams {
+    /// Computes the params for submission from the Cid of the
+    /// execution, the output, and the locked state
+    pub fn new(state_cid: Cid, exec_cid: Cid, output_cid: Cid) -> Self {
+        // cid of the linked locked state
+        let locked_cid = Cid::new_v1(
+            DAG_CBOR,
+            Code::Blake2b256.digest(&[state_cid.to_bytes(), exec_cid.to_bytes()].concat()),
+        );
+        SubmitExecParams { exec_cid, output_cid, locked_cid }
+    }
+
+    // TODO: Finish implementing this function
     // /// Verifies that the locked state has been linked successfully
     // /// to the atomic execution
     // fn verify_locked_cid(
