@@ -1,3 +1,6 @@
+use actor_primitives::tcid::TAmt;
+use actor_primitives::tcid::TCid;
+use actor_primitives::types::StorableMsg;
 use anyhow::anyhow;
 use fil_actors_runtime::runtime::Runtime;
 use fvm_ipld_blockstore::Blockstore;
@@ -8,11 +11,9 @@ use fvm_shared::address::SubnetID;
 use fvm_shared::bigint::bigint_ser;
 use fvm_shared::econ::TokenAmount;
 
-use crate::tcid::{TAmt, TCid};
 use crate::CROSSMSG_AMT_BITWIDTH;
 
 use super::checkpoint::*;
-use super::cross::StorableMsg;
 use super::state::State;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]

@@ -1,5 +1,11 @@
-// Copyright: ConsensusLab
-//
+use actor_primitives::atomic::params::{
+    is_addr_in_exec, AtomicExec, AtomicExecParams, AtomicExecParamsMeta, ExecStatus,
+    SubmitExecParams, SubmitOutput,
+};
+use actor_primitives::atomic::{AbortParams, CommitParams};
+use actor_primitives::taddress::{TAddress, ID};
+use actor_primitives::tcid::{TAmt, TCid, THamt, TLink};
+use actor_primitives::types::{HCMsgType, StorableMsg};
 use anyhow::anyhow;
 use cid::Cid;
 use fil_actors_runtime::runtime::Runtime;
@@ -16,11 +22,8 @@ use fvm_shared::error::ExitCode;
 use lazy_static::lazy_static;
 use num_traits::Zero;
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::str::FromStr;
-
-use crate::atomic;
-use crate::exec::{AtomicExec, AtomicExecParams, AtomicExecParamsMeta};
-use crate::tcid::{TAmt, TCid, THamt, TLink};
 
 use super::checkpoint::*;
 use super::cross::*;
@@ -528,17 +531,17 @@ impl State {
         store: &BS,
         cid: &TCid<TLink<AtomicExecParamsMeta>>,
         exec: &AtomicExec,
-        output: atomic::SerializedState, // LockableState to propagate. The same as in SubmitAtomicExecParams
+        output_cid: Option<Cid>,
         curr_epoch: ChainEpoch,
         abort: bool,
     ) -> anyhow::Result<()> {
         let mut visited = HashSet::new();
+        let exec_cid = exec.cid()?;
         let params = exec.params();
         for (k, v) in params.inputs.iter() {
             let sn = k.0.subnet();
             if visited.get(&sn).is_none() {
-                let mut msg =
-                    self.exec_result_msg(&sn, &v.actor, &params.msgs[0], output.clone(), abort)?;
+                let mut msg = self.exec_result_msg(&sn, &v.actor, exec_cid, output_cid, abort)?;
                 self.send_cross(store, &mut msg, curr_epoch)?;
                 // mark as sent
                 visited.insert(sn);
@@ -553,21 +556,22 @@ impl State {
         Ok(())
     }
 
+    /// Creates a new message notifying the successful atomic execution.
     fn exec_result_msg(
         &self,
         subnet: &SubnetID,
         actor: &Address,
-        msg: &StorableMsg,
-        output: atomic::SerializedState, /* FIXME: LockedState to propagate. The same as in SubmitAtomicExecParams*/
+        exec_cid: Cid,
+        output_cid: Option<Cid>,
         abort: bool,
     ) -> anyhow::Result<StorableMsg> {
         // to signal that is a system message we use system_actor_addr as source.
         let from = Address::new_hierarchical(&self.network_name, &SYSTEM_ACTOR_ADDR)?;
         let to = Address::new_hierarchical(subnet, actor)?;
-        let lock_params = atomic::LockParams::new(msg.method, msg.clone().params);
         if abort {
-            let method = atomic::METHOD_ABORT;
-            let enc = RawBytes::serialize(lock_params)?;
+            let params = AbortParams::new(exec_cid);
+            let method = actor_primitives::atomic::METHOD_ABORT;
+            let enc = RawBytes::serialize(params)?;
             return Ok(StorableMsg {
                 to,
                 from,
@@ -578,9 +582,13 @@ impl State {
             });
         }
 
-        let method = atomic::METHOD_UNLOCK;
-        let unlock_params = atomic::UnlockParams::new(lock_params, output);
-        let enc = RawBytes::serialize(unlock_params)?;
+        let method = actor_primitives::atomic::METHOD_COMMIT;
+        let output_cid = match output_cid {
+            Some(c) => c,
+            None => return Err(anyhow!("no output cid provided")),
+        };
+        let commit_params = CommitParams::new(exec_cid, output_cid);
+        let enc = RawBytes::serialize(commit_params)?;
         return Ok(StorableMsg {
             to,
             from,
@@ -589,6 +597,73 @@ impl State {
             method,
             params: enc,
         });
+    }
+
+    /// This method submits the result of an atomic execution and mutates its state
+    /// accordingly.
+    ///
+    /// This function is called by bottom-up transactions triggered in the pre_commit
+    /// stage of the corresponding actors and subnets involved in the execution
+    pub(crate) fn submit_atomic_exec<BS, RT>(
+        &mut self,
+        rt: &RT,
+        caller: Address,
+        curr_epoch: ChainEpoch,
+        params: SubmitExecParams,
+    ) -> anyhow::Result<SubmitOutput>
+    where
+        BS: Blockstore,
+        RT: Runtime<BS>,
+    {
+        // FIXME: Verify that the method is called by a top-down message.
+        // and that the caller is correct.
+        let cid = params.exec_cid;
+        let caller = TAddress::try_from(caller)?;
+
+        match self.get_atomic_exec(rt.store(), &cid.into())? {
+            None => {
+                return Err(anyhow!(format!("execution with cid {} no longer exist", &cid)));
+            }
+            Some(mut exec) => {
+                // common checks
+                atomic_exec_checks(&exec, &cid, &caller)?;
+
+                // check that that the input state has been correctly
+                // linked to the execution.
+
+                // check if all the submitted are equal to current cid
+                let out_cids: Vec<Cid> = exec.submitted().values().cloned().collect();
+                if !out_cids.iter().all(|&c| c == params.output_cid) {
+                    return Err(anyhow!(format!(
+                        "cid provided not equal to the ones submitted: {}",
+                        &cid
+                    )));
+                }
+                exec.submitted_mut().insert(caller.addr().to_string(), params.output_cid.clone());
+                // if all submissions collected
+                if exec.submitted().len() == exec.params().inputs.len() {
+                    exec.set_status(ExecStatus::Success);
+                    self.propagate_exec_result(
+                        rt.store(),
+                        &cid.into(),
+                        &exec,
+                        Some(params.output_cid),
+                        curr_epoch,
+                        false,
+                    )?;
+                    return Ok(SubmitOutput { status: exec.status() });
+                }
+                // persist the execution
+                let status = exec.status();
+                self.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
+                    e.downcast_default(
+                        ExitCode::USR_ILLEGAL_STATE,
+                        "error putting aborted atomic execution in registry",
+                    )
+                })?;
+                Ok(SubmitOutput { status })
+            }
+        }
     }
 }
 
@@ -678,4 +753,34 @@ fn get_atomic_exec<'m, BS: Blockstore>(
     registry
         .get(&c.to_bytes())
         .map_err(|e| e.downcast_wrap(format!("failed to get atomic exec for cid {}", c)))
+}
+
+pub(crate) fn atomic_exec_checks(
+    exec: &AtomicExec,
+    cid: &Cid,
+    caller: &TAddress<ID>,
+) -> anyhow::Result<()> {
+    // check if the output is aborted or already succeeded
+    if exec.status() != ExecStatus::Initialized {
+        return Err(anyhow!(format!("execution with cid {} no longer exist", &cid)));
+    }
+
+    // check if the user is involved in the execution
+    if !is_addr_in_exec(&caller, &exec.params().inputs)? {
+        return Err(anyhow!(format!("caller not part of the execution for cid {}", &cid)));
+    }
+
+    // check if the address already submitted an output
+    // FIXME: At this point we don't support the atomic execution between
+    // the same address in different subnets. This can be easily supported if needed.
+    match exec.submitted().get(&caller.addr().to_string()) {
+        Some(_) => {
+            return Err(anyhow!(format!(
+                "caller for exec {} already submitted their output",
+                &cid
+            )));
+        }
+        None => {}
+    };
+    Ok(())
 }

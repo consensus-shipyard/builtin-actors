@@ -8,9 +8,9 @@ use fvm_shared::address::{Address, SubnetID};
 use std::convert::TryFrom;
 use std::{collections::HashMap, str::FromStr};
 
-use crate::{atomic, StorableMsg};
-use actor_primitives::taddress::{Hierarchical, TAddress, TAddressKey, ID};
-use actor_primitives::tcid::{TAmt, TCid, THamt, TLink};
+use crate::taddress::{Hierarchical, TAddress, TAddressKey, ID};
+use crate::tcid::{TAmt, TCid, THamt, TLink};
+use crate::types::StorableMsg;
 
 /// Status of an atomic execution
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Deserialize_repr, Serialize_repr)]
@@ -81,13 +81,39 @@ impl AtomicExec {
 #[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct SubmitExecParams {
     /// Cid of the atomic execution for which a submission want to be sent.
-    pub cid: Cid,
-    /// Flag to signal if the execution should be aborted.
-    pub abort: bool,
-    /// Serialized state for the output (LockableState).
-    pub output: atomic::SerializedState,
+    pub exec_cid: Cid,
+    /// Cid of the output of the execution.
+    pub output_cid: Cid,
+    /// Cid of the the locked state linked to the execution
+    /// This is the cid of (exec_cid, lock_cid).
+    pub locked_cid: Cid,
 }
 impl Cbor for SubmitExecParams {}
+
+impl SubmitExecParams {
+    // /// Verifies that the locked state has been linked successfully
+    // /// to the atomic execution
+    // fn verify_locked_cid(
+    //     &self,
+    //     caller: &TAddress<Hierarchical<ID>>,
+    //     exec: &AtomicExec,
+    // ) -> anyhow::Result<bool> {
+    //     match exec.params().inputs.get(caller.raw_addr()) {
+    //         Some(input) => {}
+    //         None => return Err(anyhow!("input for address caller not found")),
+    //     }
+    //     self.locked_cid == exec.cid()
+    // }
+}
+
+/// Parameters used to abort an atomic execution
+#[derive(Clone, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+pub struct AbortExecParams {
+    /// Cid of the atomic execution for which a submission want to be aborted
+    pub exec_cid: Cid,
+}
+
+impl Cbor for AbortExecParams {}
 
 /// Parameters to uniquely initiate an atomic execution.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
@@ -128,7 +154,10 @@ impl Cbor for SubmitOutput {}
 /// and the actor where it's been locked needs to be specified.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockedStateInfo {
+    /// Cid of the version of the actor state with all the locked
+    /// state being used for the execution
     pub cid: Cid,
+    /// Address of the actor involved in the execution in the subnet.
     pub actor: Address,
 }
 impl Cbor for LockedStateInfo {}

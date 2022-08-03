@@ -3,58 +3,107 @@ use anyhow::anyhow;
 use cid::multihash::Code::Blake2b256;
 use cid::multihash::MultihashDigest;
 use cid::Cid;
-use fil_actors_runtime::cbor;
 use fvm_ipld_encoding::{tuple::*, Cbor, RawBytes, DAG_CBOR};
-use fvm_shared::bigint::bigint_ser;
-use fvm_shared::{address::Address, econ::TokenAmount, MethodNum};
+use fvm_shared::MethodNum;
 use serde::de::DeserializeOwned;
 use serde::ser::Serialize;
 
-use crate::tcid::{TCid, THamt};
+pub mod params;
+
+use crate::{
+    tcid::{TCid, THamt},
+    types::StorableMsg,
+};
+
+use self::params::AtomicExecParamsRaw;
 
 /// Trait that determines the functions that need to be implemented by
-/// a state object to be lockable and be used in an atomic execution.
+/// a state object to be "embeddable" inside a lockable state.
 ///
-/// Different strategies may be used to merge different locked state to
-/// prepare the actor state for the execution, and for the merging of the
-/// output of the execution to the original state of the actor.
+/// The implementation should be provided with a default strategy to merge
+/// two objects of the same type. Actor developers may choose to use alternative
+/// merging strategies in different situations, but the default merging
+/// strategy should be provided.
 pub trait MergeableState {
     /// Merge a locked state (not necessarily the output) to the current state.
     fn merge(&mut self, other: Self) -> anyhow::Result<()>;
-    /// Merge the output of an execution to the current state.
-    fn merge_output(&mut self, other: Self) -> anyhow::Result<()>;
 }
 
-/// Internal map kept by actor supporting atomic executions to track
-/// the states that have been locked and are used in an atomic exec.
-pub type LockedMap = TCid<THamt<Cid, SerializedState>>;
-
-/// StorableMsg stores all the relevant information required
-/// to execute cross-messages.
-///
-/// We follow this approach because we can't directly store types.Message
-/// as we did in the actor's Go counter-part. Instead we just persist the
-/// information required to create the cross-messages and execute in the
-/// corresponding node implementation.
-// FIXME: Take StorableMsg from cross.rs and put it here.
-#[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
-pub struct StorableMsg {
-    pub from: Address,
-    pub to: Address,
-    pub method: MethodNum,
-    pub params: RawBytes,
-    #[serde(with = "bigint_ser")]
-    pub value: TokenAmount,
-    pub nonce: u64,
-}
-
-impl Cbor for StorableMsg {}
-/// Trait that specifies the interface of an actor state able to support
+/// Trait to be implemented by the state of an actor to support
 /// atomic executions.
-pub trait LockableActorState {
-    /// Map with all the locked state in the actor uniquely identified through
-    /// their Cid.
-    fn locked_map_cid(&self) -> LockedMap;
+pub trait LockableActorState
+where
+    Self: Serialize + DeserializeOwned,
+{
+    /// Returns an empty instance of the state to be populated
+    /// with locked variables.
+    fn new() -> Self;
+
+    /// Specifies how to merge two instances of the actor state
+    /// according to the messages used for the execution.
+    fn merge(&mut self, other: Self, params: LockParams);
+
+    fn cid(&self) -> anyhow::Result<Cid> {
+        let ser = RawBytes::serialize(&self)?;
+        Ok(Cid::new_v1(DAG_CBOR, Blake2b256.digest(ser.as_slice())))
+    }
+
+    /// Gets state object from serialized state.
+    fn from_serialized(value: &SerializedState) -> anyhow::Result<Self> {
+        Ok(RawBytes::deserialize(&value)?)
+    }
+}
+
+/// LockableState
+pub struct LockableState<T>
+where
+    T: Serialize + DeserializeOwned + MergeableState,
+{
+    lock: bool,
+    /// CID of the linked execution to the locked state.
+    exec_cid: Option<Cid>,
+    s: T,
+}
+
+impl<T> LockableState<T>
+where
+    T: Serialize + DeserializeOwned + MergeableState,
+{
+    /// Creates new lockable state from object
+    pub fn new(s: T) -> Self {
+        LockableState { lock: false, s, exec_cid: None }
+    }
+
+    /// Locks the state
+    pub fn lock(&mut self) -> anyhow::Result<()> {
+        if self.lock {
+            return Err(anyhow!("state already locked"));
+        }
+        self.lock = true;
+        Ok(())
+    }
+
+    /// Unlocks the state
+    pub fn unlock(&mut self) -> anyhow::Result<()> {
+        if !self.lock {
+            return Err(anyhow!("state already unlocked"));
+        }
+        self.lock = false;
+        Ok(())
+    }
+
+    /// Check if the state is locked
+    pub fn is_locked(&self) -> bool {
+        return self.lock;
+    }
+
+    pub fn state(&self) -> &T {
+        &self.s
+    }
+
+    pub fn exec_cid(&self) -> Option<Cid> {
+        self.exec_cid
+    }
 }
 
 /// Return type for all actor functions.
@@ -62,6 +111,29 @@ pub trait LockableActorState {
 /// It returns an option for developers to optionally choose if
 /// to return an output in the function.
 type ActorResult = anyhow::Result<Option<RawBytes>>;
+
+/// Type alias for serialized actor state
+// FIXME: Add a generic bound to limit the serialized objects
+// that can be used in the LockedMap to the LockableActorState.
+type SerializedState = RawBytes;
+/// Internal map kept by actor supporting atomic executions to track
+/// the states that have been locked and are used in an atomic exec.
+pub type LockedMap = TCid<THamt<Cid, SerializedState>>;
+
+/// Method number to call `lock` and prepare (and lock) the state
+/// for an atomic execution.
+pub const METHOD_LOCK: MethodNum = 2;
+/// Method number used to commit the output of an execution in a subnet
+/// and trigger its propagation to the common_parent executing the
+/// execution.
+pub const METHOD_PRE_COMMIT: MethodNum = 3;
+/// Method number to trigger the commitment of the output state.
+/// This message is called through a top-down message.
+pub const METHOD_COMMIT: MethodNum = 5;
+/// Method number to signal in the actor that the execution
+/// has been aborted and the state can be unlocked. This method
+/// is called through a top-down message.
+pub const METHOD_ABORT: MethodNum = 4;
 
 /// Trait for an actor able to support an atomic execution.
 ///
@@ -72,131 +144,44 @@ pub trait LockableActor<S>
 where
     S: Serialize + DeserializeOwned + LockableActorState,
 {
-    const METHOD_LOCK: MethodNum = 2;
-    const METHOD_MERGE: MethodNum = 3;
-    const METHOD_ABORT: MethodNum = 4;
-    const METHOD_UNLOCK: MethodNum = 5;
+    /// Function to prepare and locked the state generally for
+    /// an atomic execution according to the locking params of
+    /// the execution.
     fn lock(params: LockParams) -> ActorResult;
-    fn pre_commit() -> ActorResult;
+
+    /// Function to call the pre_comit stage of an execution,
+    /// where the locked state is linked to a specific execution,
+    /// and the output of the execution is submitted and persisted
+    /// to be propagated to the common parent orchestrating the execution.
+    fn pre_commit(params: PreCommitParams) -> ActorResult;
+
+    /// Function triggered by a bottom-up message that performs the commitment
+    /// of the output state by a specific execution the actor is involved in.
     fn commit(params: LockParams) -> ActorResult;
-    fn abort(params: LockParams) -> ActorResult;
-    fn state(params: LockParams) -> S;
-}
 
-type TypeCode = String;
-pub trait StateType {
-    fn state_type(&self) -> TypeCode;
-}
+    /// Function triggered by a bottom-up message that aborts the execution
+    /// and unlocks the corresponding state.
+    fn abort(exec_cid: Cid) -> ActorResult;
 
-#[macro_export]
-macro_rules! register_types {
-    ($($typ:ident),+) => {
-        $(
-            impl StateType for $typ {
-                fn state_type(&self) -> TypeCode {
-                    stringify!($typ).to_string()
-                }
-            }
-        )*
-    };
-}
+    /// Determines if a specific actor method is supported to run
+    /// an atomic execution over it.
+    fn is_atomic_method(method: MethodNum) -> bool;
 
-macro_rules! build {
-    ($($body:tt)*) => {
-        as_item! {
-            enum STypes { $($body)* }
-        }
-    };
-}
+    /// Sets an instance of locked state in the LockedMap
+    fn set_locked_state(&mut self) -> anyhow::Result<Cid>;
 
-macro_rules! as_item {
-    ($i:item) => {
-        $i
-    };
-}
-
-impl<T> Into<SerializedState> for State<T>
-where
-    T: MergeableState + StateType + Serialize + DeserializeOwned,
-{
-    fn into(self) -> SerializedState {
-        SerializedState { t: self.s.state_type(), ser: RawBytes::serialize(self.s).unwrap().into() }
-    }
-}
-
-/// Serializes exactly as its underlying `Cid`.
-impl<T> serde::Serialize for State<T>
-where
-    T: MergeableState + StateType + Serialize + DeserializeOwned,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        SerializedState { t: self.s.state_type(), ser: RawBytes::serialize(&self.s).unwrap() }
-            .serialize(serializer)
-    }
-}
-
-impl<'d, T> serde::Deserialize<'d> for State<T>
-where
-    T: MergeableState + StateType + Serialize + DeserializeOwned,
-    Self: TryFrom<SerializedState>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'d>,
-    {
-        RawBytes::deserialize(&SerializedState::deserialize(deserializer)?.ser)
-            .map_err(|e| serde::de::Error::custom(format!("error deserializing state: {}", e)))
-    }
-}
-
-/// Serialized representation of the locked state of an actor.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple, Default)]
-pub struct SerializedState {
-    /// type of the serialized state
-    t: TypeCode,
-    /// serialization of the state
-    // #[serde(with = "serde_bytes")]
-    ser: RawBytes,
-}
-
-pub struct State<T>
-where
-    T: MergeableState + StateType + Serialize + DeserializeOwned,
-{
-    s: T,
-}
-
-impl<T> State<T>
-where
-    T: MergeableState + StateType + Serialize + DeserializeOwned,
-{
-    pub fn new(s: T) -> Self {
-        Self { s }
-    }
-
-    pub fn cid(&self) -> anyhow::Result<Cid> {
-        let ser = RawBytes::serialize(&self)?;
-        Ok(Cid::new_v1(DAG_CBOR, Blake2b256.digest(ser.as_slice())))
-    }
-
-    pub fn from_serialized(value: &SerializedState) -> anyhow::Result<Self> {
-        // if get_type_code!(T).to_string() != value.t {
-        //     return Err(anyhow!("error: serialized state has the wrong type"));
-        // }
-        Ok(State::new(RawBytes::deserialize(&value.ser)?))
-    }
+    /// Gets an instance of locked state in the LockedMap
+    fn get_locked_state(&self, cid: Cid) -> Self;
 }
 
 /// Parameters used to lock certain state of an actor for its use in an atomic
 /// execution
 ///
 /// Different locking strategies may be implemented in the actor according to the
-/// method and parameters used in the atomic execution. This parameters gives
-/// information to the actor about the execution to be performed and thus the state
-/// that needs to be locked.
+/// method and parameters used in the atomic execution. The parameters gives information
+/// about the message that are used in the execution, the return of the locking
+/// phase is a list of cids of states that have been merged in the actor's state and
+/// that need to be used for the execution.
 #[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
 pub struct LockParams {
     msgs: Vec<StorableMsg>,
@@ -208,50 +193,42 @@ impl LockParams {
     }
 }
 
-/// Unlock parameters that pass the output of the execution as the serialized
-/// output state of the execution, along with the lock parameters that determines
-/// the type of execution being performed and thus the merging strategy that needs
-/// to be followed by the actor.
+/// Params for the pre_commit stage where the locked state is linked to a specific
+/// execution, and the output of the execution is notified. This triggers and bottom-up
+/// message towards the common parent orchestrating the state to initialize (or commit)
+/// the output
 #[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
-pub struct UnlockParams {
-    pub params: LockParams,
-    pub state: SerializedState, // FIXME: This is a locked state for the output. We may be able to use generics here.
+pub struct PreCommitParams {
+    /// Parameters agreed by the parties for the atomic execution.
+    pub exec: AtomicExecParamsRaw,
+    /// SerializedState that represents the output of the execution.
+    pub output: SerializedState,
 }
-impl Cbor for UnlockParams {}
-impl UnlockParams {
-    pub fn new(params: LockParams, state: SerializedState) -> Self {
-        UnlockParams { params, state }
-    }
-    pub fn from_raw_bytes(ser: &RawBytes) -> anyhow::Result<Self> {
-        Ok(cbor::deserialize_params(ser)?)
+impl Cbor for PreCommitParams {}
+
+/// Commit parameters that pass through a top-down message information about
+/// the execution to be committed and the cid of the output that needs to be committed.
+#[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
+pub struct CommitParams {
+    pub exec_cid: Cid,
+    pub output_cid: Cid,
+}
+impl Cbor for CommitParams {}
+impl CommitParams {
+    pub fn new(exec_cid: Cid, output_cid: Cid) -> Self {
+        CommitParams { exec_cid, output_cid }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Debug, PartialEq, Eq, Clone, Serialize_tuple, Deserialize_tuple, Default)]
-    pub struct TestType {
-        pub dummy: u64,
-    }
-    register_types!(TestType);
-
-    impl MergeableState for TestType {
-        fn merge(&mut self, _other: Self) -> anyhow::Result<()> {
-            Ok(())
-        }
-        fn merge_output(&mut self, _other: Self) -> anyhow::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn test_types() {
-        let a = TestType { dummy: 1 };
-        assert_eq!(a.state_type(), "TestType");
-        let st = State::new(a);
-        let ser: SerializedState = st.into();
-        State::<TestType>::from_serialized(&ser).unwrap();
+/// Abort parameters that pass through a top-down message to unlock state
+/// after an aborted execution.
+#[derive(Debug, Eq, PartialEq, Serialize_tuple, Deserialize_tuple)]
+pub struct AbortParams {
+    pub exec_cid: Cid,
+}
+impl Cbor for AbortParams {}
+impl AbortParams {
+    pub fn new(exec_cid: Cid) -> Self {
+        AbortParams { exec_cid }
     }
 }

@@ -1,10 +1,9 @@
-use actor_primitives::taddress::TAddress;
-use actor_primitives::{atomic, tcid};
-use cid::Cid;
-use exec::{
-    is_addr_in_exec, is_common_parent, AtomicExec, AtomicExecParamsRaw, ExecStatus, LockedOutput,
-    SubmitExecParams, SubmitOutput,
+use actor_primitives::atomic::params::{
+    is_common_parent, AbortExecParams, AtomicExec, AtomicExecParamsRaw, ExecStatus, LockedOutput,
+    SubmitOutput,
 };
+use actor_primitives::taddress::TAddress;
+use actor_primitives::types::{HCMsgType, StorableMsg};
 use fil_actors_runtime::runtime::{ActorCode, Runtime};
 use fil_actors_runtime::{
     actor_error, cbor, ActorDowncast, ActorError, BURNT_FUNDS_ACTOR_ADDR, REWARD_ACTOR_ADDR,
@@ -25,7 +24,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 
 pub use self::checkpoint::{Checkpoint, CrossMsgMeta};
-pub use self::cross::{is_bottomup, CrossMsgs, HCMsgType, StorableMsg};
 pub use self::state::*;
 pub use self::subnet::*;
 pub use self::types::*;
@@ -35,7 +33,6 @@ fil_actors_runtime::wasm_trampoline!(Actor);
 
 pub mod checkpoint;
 mod cross;
-pub mod exec;
 #[doc(hidden)]
 pub mod ext;
 mod state;
@@ -58,7 +55,15 @@ pub enum Method {
     SendCross = 9,
     ApplyMessage = 10,
     InitAtomicExec = 11,
-    SubmitAtomicExec = 12,
+    AbortAtomicExec = 12,
+}
+
+/// List of methods that can only be called in the SCA
+/// through a cross-net message.
+#[derive(FromPrimitive)]
+#[repr(u64)]
+pub enum CrossMethod {
+    SubmitAtomicExec = 13,
 }
 
 /// Subnet Coordinator Actor
@@ -550,19 +555,13 @@ impl Actor {
         // FIXME: We just need the state to check the current network name, but we are
         // picking up the whole state. Is it more efficient in terms of performance and
         // gas usage to check how to apply the message (b-u or t-p) inside rt.transaction?
-        let st: State = rt.state()?;
+        let read_st: State = rt.state()?;
         let mut msg = params.clone();
-        let rto = match msg.to.raw_addr() {
-            Ok(to) => to,
-            Err(_) => {
-                return Err(actor_error!(illegal_argument, "error getting raw address from msg"))
-            }
-        };
         let sto = match msg.to.subnet() {
             Ok(to) => to,
             Err(_) => return Err(actor_error!(illegal_argument, "error getting subnet from msg")),
         };
-        match msg.apply_type(&st.network_name) {
+        match msg.apply_type(&read_st.network_name) {
             Ok(HCMsgType::BottomUp) => {
                 // perform state transition
                 rt.transaction(|st: &mut State, rt| {
@@ -583,9 +582,9 @@ impl Actor {
                     Ok(())
                 })?;
                 // if directed to current network, execute message.
-                if sto == st.network_name {
+                if sto == read_st.network_name {
                     // FIXME: Should we handle return in some way?
-                    let _ = rt.send(rto, msg.method, msg.params, msg.value)?;
+                    let _ = run_cross_msg(rt, &msg)?;
                 }
             }
             Ok(HCMsgType::TopDown) => {
@@ -621,9 +620,9 @@ impl Actor {
                 })?;
 
                 // if directed to the current network propagate the message
-                if sto == st.network_name {
+                if sto == read_st.network_name {
                     // FIXME: Should we handle return in some way?
-                    let _ = rt.send(rto, msg.method, msg.params, msg.value)?;
+                    let _ = run_cross_msg(rt, &msg)?;
                 }
             }
             _ => {
@@ -640,6 +639,11 @@ impl Actor {
     /// Initializes an atomic execution to be orchestrated by the current subnet.
     /// This method verifies that the execution is being orchestrated by the right subnet
     /// and that its semantics and inputs are correct.
+    // FIXME: According to the new design of the protocol, the execution doesn't need to
+    // be explicitly initialized. The first pre_commit message from one of the participant
+    // initializes the execution and commits the first output. From there on, the rest of
+    // pre_commits submit the rest of the outputs for the execution.
+    // See for further details: https://github.com/protocol/ConsensusLab/discussions/154
     fn init_atomic_exec<BS, RT>(
         rt: &mut RT,
         params: AtomicExecParamsRaw,
@@ -720,8 +724,7 @@ impl Actor {
                         ExitCode::USR_ILLEGAL_STATE,
                         "error putting initialized atomic execution in registry",
                     )
-                })?
-;
+                })?;
             }
         };
         Ok(())
@@ -731,16 +734,19 @@ impl Actor {
         Ok(LockedOutput { cid })
     }
 
-    /// This method submits the result of an atomic execution and mutates its state
-    /// accordingly.
-    fn submit_atomic_exec<BS, RT>(
+    /// This method aborts an atomic execution and triggers the corresponding
+    /// topdown transaction to unlock the state in the original subnet
+    ///
+    /// This function can be triggered by any party involved in the execution.
+    fn abort_atomic_exec<BS, RT>(
         rt: &mut RT,
-        params: SubmitExecParams,
+        params: AbortExecParams,
     ) -> Result<SubmitOutput, ActorError>
     where
         BS: Blockstore,
         RT: Runtime<BS>,
     {
+        // FIXME: Verify that the method is called by a top-down message.
         rt.validate_immediate_caller_type(CALLER_TYPES_SIGNABLE.iter())?;
 
         let caller = TAddress::try_from(rt.message().caller()).map_err(|_| {
@@ -748,7 +754,7 @@ impl Actor {
         })?;
 
         let status = rt.transaction(|st: &mut State, rt| {
-            let cid = params.cid;
+            let cid = params.exec_cid;
 
             match st.get_atomic_exec(rt.store(), &cid.into()).map_err(|e| {
                 e.downcast_default(
@@ -763,92 +769,31 @@ impl Actor {
                     ));
                 }
                 Some(mut exec) => {
-                    // check if the output is aborted or already succeeded
-                    if exec.status() != ExecStatus::Initialized {
-                        return Err(actor_error!(
-                            illegal_state,
-                            format!("execution with cid {} no longer exist", &cid)
-                        ));
-                    }
-
-                    // check if the user is involved in the execution
-                    if !is_addr_in_exec(&caller, &exec.params().inputs).map_err(|e| {
+                    // common checks
+                    atomic_exec_checks(&exec, &cid, &caller).map_err(|e| {
                         e.downcast_default(
                             ExitCode::USR_ILLEGAL_ARGUMENT,
-                            "error checking if address is involved in the execution",
+                            "error passing atomic exec checks",
                         )
-                    })? {
-                        return Err(actor_error!(
-                            illegal_argument,
-                            format!("caller not part of the execution for cid {}", &cid)
-                        ));
-                    }
-
-                    // check if the address already submitted an output
-                    // FIXME: At this point we don't support the atomic execution between
-                    // the same address in different subnets. This can be easily supported if needed.
-                    match exec.submitted().get(&caller.addr().to_string()) {
-                        Some(_) => {
-                            return Err(actor_error!(
-                                illegal_argument,
-                                format!("caller for exec {} already submitted their output", &cid)
-                            ));
-                        }
-                        None => {}
-                    };
-
-                    // check if this is an abort
-                    if params.abort {
-                        // mutate status
-                        exec.set_status(ExecStatus::Aborted);
-                        //  propagate result to subnet
-                        st.propagate_exec_result(
-                            rt.store(),
-                            &cid.into(),
-                            &exec,
-                            params.output,
-                            rt.curr_epoch(),
-                            true,
+                    })?;
+                    // mutate status
+                    exec.set_status(ExecStatus::Aborted);
+                    //  propagate result to subnet
+                    st.propagate_exec_result(
+                        rt.store(),
+                        &cid.into(),
+                        &exec,
+                        None,
+                        rt.curr_epoch(),
+                        true,
+                    )
+                    .map_err(|e| {
+                        e.downcast_default(
+                            ExitCode::USR_ILLEGAL_STATE,
+                            "error propagating execution result to subnets",
                         )
-                        .map_err(|e| {
-                            e.downcast_default(
-                                ExitCode::USR_ILLEGAL_STATE,
-                                "error propagating execution result to subnets",
-                            )
-                        })?;
-                        return Ok(exec.status());
-                    }
+                    })?;
 
-                    // if not aborting
-                    let output_cid = params.output.cid();
-                    // check if all the submitted are equal to current cid
-                    let out_cids: Vec<Cid> = exec.submitted().values().cloned().collect();
-                    if !out_cids.iter().all(|&c| c == output_cid) {
-                        return Err(actor_error!(
-                            illegal_argument,
-                            format!("cid provided not equal to the ones submitted: {}", &cid)
-                        ));
-                    }
-                    exec.submitted_mut().insert(caller.addr().to_string(), output_cid);
-                    // if all submissions collected
-                    if exec.submitted().len() == exec.params().inputs.len() {
-                        exec.set_status(ExecStatus::Success);
-                        st.propagate_exec_result(
-                            rt.store(),
-                            &cid.into(),
-                            &exec,
-                            params.output,
-                            rt.curr_epoch(),
-                            false,
-                        )
-                        .map_err(|e| {
-                            e.downcast_default(
-                                ExitCode::USR_ILLEGAL_STATE,
-                                "error propagating execution result to subnets",
-                            )
-                        })?;
-                        return Ok(exec.status());
-                    }
                     // persist the execution
                     let status = exec.status();
                     st.set_atomic_exec(rt.store(), &cid.into(), exec).map_err(|e| {
@@ -922,8 +867,8 @@ impl ActorCode for Actor {
                 let res = Self::init_atomic_exec(rt, cbor::deserialize_params(params)?)?;
                 Ok(RawBytes::serialize(res)?)
             }
-            Some(Method::SubmitAtomicExec) => {
-                let res = Self::submit_atomic_exec(rt, cbor::deserialize_params(params)?)?;
+            Some(Method::AbortAtomicExec) => {
+                let res = Self::abort_atomic_exec(rt, cbor::deserialize_params(params)?)?;
                 Ok(RawBytes::serialize(res)?)
             }
             None => Err(actor_error!(unhandled_message; "Invalid method")),
@@ -947,4 +892,51 @@ where
     )?;
     let id: Address = cbor::deserialize(&ret, "address response")?;
     Ok(id)
+}
+
+/// Executes a cross-message directed to the current network
+fn run_cross_msg<BS, RT>(rt: &mut RT, msg: &StorableMsg) -> Result<RawBytes, ActorError>
+where
+    RT: Runtime<BS>,
+    BS: Blockstore,
+{
+    // if the cross-net message is directed to the SCA we can handle
+    // it internally.
+
+    let rto = match msg.to.raw_addr() {
+        Ok(addr) => addr,
+        Err(e) => {
+            return Err(actor_error!(illegal_argument, format!("error getting raw address: {}", e)))
+        }
+    };
+    if rto == *SCA_ACTOR_ADDR {
+        let ret =
+            rt.transaction(|st: &mut State, rt| match FromPrimitive::from_u64(msg.method) {
+                Some(CrossMethod::SubmitAtomicExec) => {
+                    let ret = st
+                        .submit_atomic_exec(
+                            rt,
+                            rto,
+                            rt.curr_epoch(),
+                            cbor::deserialize_params(&msg.params)?,
+                        )
+                        .map_err(|e| {
+                            e.downcast_default(
+                                ExitCode::USR_ILLEGAL_STATE,
+                                "error submitting atomic execution",
+                            )
+                        })?;
+                    Ok(RawBytes::serialize(&ret)?)
+                }
+                _ => {
+                    return Err(actor_error!(
+                        illegal_argument,
+                        "illegal argument used to call the SCA through cross-net message"
+                    ))
+                }
+            })?;
+        Ok(ret)
+    } else {
+        rt.send(rto, msg.method, msg.params.clone(), msg.value.clone())
+    }
 }

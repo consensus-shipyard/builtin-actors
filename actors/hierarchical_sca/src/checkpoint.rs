@@ -1,3 +1,5 @@
+use actor_primitives::tcid::TCid;
+use actor_primitives::tcid::TLink;
 use anyhow::anyhow;
 use cid::multihash::Code;
 use cid::multihash::MultihashDigest;
@@ -9,8 +11,7 @@ use fvm_shared::bigint::bigint_ser;
 use fvm_shared::clock::ChainEpoch;
 use fvm_shared::econ::TokenAmount;
 
-use crate::tcid::{TCid, TLink};
-use crate::CrossMsgs;
+use crate::cross::CrossMsgs;
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize_tuple, Deserialize_tuple)]
 pub struct Checkpoint {
